@@ -1,0 +1,58 @@
+jquants:
+  # Do not put credentials here: set JQUANTS_API_KEY (or JQUANTS_REFRESH_TOKEN) in the
+  # environment. Non-empty values below are ignored unless JQQLIB_ALLOW_YAML_CREDENTIALS=1.
+  # 資格情報はここに置かない。解決順序は環境変数 -> macOS Keychain -> エラー
+  # (src/jqqlib/fetch.py の create_jquants_client)。手順は docs/configuration.md の
+  # 「API Keyはどこに設定する？」を参照。
+  api_key: ""
+  refresh_token: ""
+
+storage:
+  parquet_dir: "./data/parquet"
+  qlib_dir: "./data/qlib_jp"
+  # 監査結果 last_audit.json の保存先（実行時の作業ディレクトリ基準）
+  audit_dir: "./data/audit"
+
+etl:
+  # API呼び出しを日付チャンクに分割して安定化（Lightプラン想定）
+  chunk_days: 30
+  # 日次運用は upsert 推奨（既存Parquetに差分を上書きマージ）
+  merge_mode: "upsert"
+  # 一時的な429/5xx/接続エラーに対するリトライ設定
+  retries: 3
+  retry_base_delay_sec: 1.0
+  retry_max_delay_sec: 8.0
+  retry_jitter_sec: 0.3
+  request_interval_sec: 1.0
+  # 日次の自己監査が publish 前に直近何営業日分の欠損を確認するか。
+  # 日次 lookback（既定10）以下にすること。
+  audit_window_business_days: 5
+
+universe:
+  # Lightプラン前提: 取得対象銘柄を絞る（例: TOPIX100など）
+  codes: []
+
+publish_check:
+  # publish-check が比較する運用リポジトリ側の git 参照。master 運用なら "origin/master"。
+  # Git revision that publish-check compares the manifest against (default origin/main).
+  git_ref: "origin/main"
+
+qlib:
+  # vendor_factor (default): dump split/reverse-split/rights-issue adjusted prices
+  # plus Qlib $factor computed from the vendor AdjFactor/AdjustmentFactor column.
+  # none: dump raw prices (six fields, no factor file).
+  # vendor_factor（既定）: ベンダー AdjFactor から累積した $factor 付きで
+  # 分割・併合・ライツイシュー調整済み価格を Qlib に出す。
+  # none: 調整前の六フィールドのみ。
+  adjustment: "vendor_factor"
+
+# 実験的: 財務データ ETL（python -m jqqlib.fundamentals_pipeline）。使う場合のみコメントを外す。
+# 各キーの意味は docs/fundamentals.md を参照。
+# fundamentals:
+#   parquet_dir: "./data/fundamentals"
+#   calendar_path: "./data/qlib_jp/calendars/day.txt"
+#   retries: 3
+#   retry_base_delay_sec: 1.0
+#   retry_max_delay_sec: 8.0
+#   retry_jitter_sec: 0.3
+#   request_interval_sec: 1.1

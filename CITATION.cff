@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata from this file."
+type: software
+title: jquants-qlib
+authors:
+  - family-names: Iyoda
+    given-names: Atsushi
+repository-code: "https://github.com/iyoda/jquants-qlib"
+license: MIT
+version: 0.1.0
+abstract: "Daily ETL from the J-Quants API to Parquet and a Qlib dataset for Japanese equities."
+keywords:
+  - j-quants
+  - qlib
+  - japanese-equities
+  - quant
+  - etl
+  - parquet

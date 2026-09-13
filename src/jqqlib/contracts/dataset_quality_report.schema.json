@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/iyoda/jquants-qlib/contracts/dataset_quality_report.v2.schema.json",
+  "title": "J-Quants Qlib Dataset Quality Report",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "provider_uri", "parquet_path", "dataset_manifest_ref", "status", "highest_severity", "severity_counts", "validation_errors", "findings", "checks"],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "generated_at": { "type": "string" },
+    "provider_uri": { "type": "string" },
+    "parquet_path": { "type": "string" },
+    "dataset_id": { "type": ["string", "null"] },
+    "dataset_manifest_ref": { "type": "string" },
+    "status": { "enum": ["pass", "warning", "fail"] },
+    "highest_severity": { "enum": ["pass", "info", "warning", "fail"] },
+    "severity_counts": {
+      "type": "object",
+      "required": ["fail", "warning", "info"],
+      "properties": {
+        "fail": { "type": "integer", "minimum": 0 },
+        "warning": { "type": "integer", "minimum": 0 },
+        "info": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "validation_errors": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["check", "severity", "count", "detail"],
+        "properties": {
+          "check": { "type": "string" },
+          "severity": { "enum": ["fail", "warning", "info"] },
+          "count": { "type": "integer", "minimum": 0 },
+          "detail": { "type": "string" },
+          "field": { "type": "string" },
+          "fields": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "columns": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "interpretation": { "type": "string" }
+        }
+      }
+    },
+    "checks": { "type": "object" }
+  }
+}

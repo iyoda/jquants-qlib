@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/iyoda/jquants-qlib/contracts/dataset_manifest.v2.schema.json",
+  "title": "J-Quants Qlib Dataset Manifest",
+  "type": "object",
+  "required": ["schema_version", "generated_at", "dataset_id", "build_id", "quality_status", "provider_uri", "parquet_path", "dataset", "qlib", "field_schema", "adjustment_policy", "lineage", "source"],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "generated_at": { "type": "string" },
+    "dataset_id": { "type": "string", "minLength": 1 },
+    "build_id": { "type": "string", "minLength": 1 },
+    "quality_status": { "enum": ["pass", "warning", "fail"] },
+    "provider_uri": { "type": "string", "minLength": 1 },
+    "parquet_path": { "type": "string", "minLength": 1 },
+    "dataset": {
+      "type": "object",
+      "required": ["date_start", "date_end", "rows", "instruments", "fields"],
+      "properties": {
+        "date_start": { "type": "string" },
+        "date_end": { "type": "string" },
+        "rows": { "type": "integer", "minimum": 1 },
+        "instruments": { "type": "integer", "minimum": 1 },
+        "fields": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1
+        }
+      }
+    },
+    "qlib": {
+      "type": "object",
+      "required": ["calendar_path", "calendar_start", "calendar_end", "calendar_days", "instrument_count"],
+      "properties": {
+        "calendar_path": { "type": "string" },
+        "calendar_start": { "type": ["string", "null"] },
+        "calendar_end": { "type": ["string", "null"] },
+        "calendar_days": { "type": "integer", "minimum": 0 },
+        "instrument_count": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "field_schema": {
+      "type": "object",
+      "required": ["symbol", "date", "open", "high", "low", "close", "volume", "amount"],
+      "additionalProperties": {
+        "type": "object",
+        "required": ["role", "dtype", "nullable"],
+        "properties": {
+          "role": { "type": "string" },
+          "dtype": { "type": "string" },
+          "source_column": { "type": "string" },
+          "qlib_expression": { "type": "string" },
+          "nullable": { "type": "boolean" },
+          "adjustment": { "type": "string" }
+        }
+      }
+    },
+    "adjustment_policy": {
+      "type": "object",
+      "required": ["schema_version", "price_adjustment", "volume_adjustment", "amount_adjustment", "producer_transform"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "price_adjustment": { "type": "string" },
+        "volume_adjustment": { "type": "string" },
+        "amount_adjustment": { "type": "string" },
+        "price_fields": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "volume_fields": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "amount_fields": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "producer_transform": { "type": "string" },
+        "source": { "type": "string" },
+        "known_limitations": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "lineage": {
+      "type": "object",
+      "required": ["parquet_sha256", "manifest_sha256", "manifest_sha256_scope"],
+      "properties": {
+        "parquet_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "manifest_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "manifest_sha256_scope": { "const": "payload_without_manifest_sha256" },
+        "producer_git_commit": { "type": ["string", "null"] },
+        "quality_report_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+      }
+    },
+    "source": { "type": "object", "required": ["kind"] }
+  }
+}

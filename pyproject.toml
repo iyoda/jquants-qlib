@@ -1,0 +1,92 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jquants-qlib"
+version = "0.1.0"
+description = "Daily ETL from the J-Quants API to Parquet and a Qlib dataset for Japanese equities"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
+requires-python = ">=3.10,<3.13"
+authors = [{ name = "IYODA Atsushi" }]
+keywords = ["j-quants", "qlib", "japanese-equities", "quant", "etl", "parquet"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Financial and Insurance Industry",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
+  "Topic :: Office/Business :: Financial :: Investment",
+  "Typing :: Typed",
+]
+dependencies = [
+  "pandas>=2.1",
+  "numpy>=1.26",
+  "requests>=2.31",
+  "exchange_calendars>=4.13.2,<5",
+  "pyarrow>=14.0",
+  "PyYAML>=6.0",
+  "jquants-api-client>=1.7",
+  "pyqlib>=0.9",
+  "jsonschema>=4.18",
+]
+
+[project.optional-dependencies]
+dev = [
+  "ruff>=0.6",
+  "mypy>=1.10",
+  "build>=1.2",
+  "twine>=6.1",
+  "coverage>=7.5",
+  "pandas-stubs",
+  "types-PyYAML",
+  "types-requests",
+  "types-jsonschema",
+]
+
+[project.urls]
+Homepage = "https://github.com/iyoda/jquants-qlib"
+Documentation = "https://github.com/iyoda/jquants-qlib#readme"
+Source = "https://github.com/iyoda/jquants-qlib"
+Changelog = "https://github.com/iyoda/jquants-qlib/blob/master/CHANGELOG.md"
+Issues = "https://github.com/iyoda/jquants-qlib/issues"
+
+[project.scripts]
+jqqlib = "jqqlib.pipeline:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+jqqlib = ["contracts/*.json", "data/*.yaml", "py.typed"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.mypy]
+# mypy checks all of `src/jqqlib`; `scripts/` and `tests/` are not yet type-checked.
+files = ["src/jqqlib"]
+# `python_version = "3.10"` is not usable here: current numpy stubs use 3.12-only syntax.
+# The CI test matrix (3.10-3.12) is the guard against 3.11+-only stdlib APIs such as datetime.UTC.
+
+# Third-party packages that ship neither stubs nor a py.typed marker. Keep this list to the
+# modules mypy actually reports; do not reintroduce a global ignore_missing_imports.
+[[tool.mypy.overrides]]
+module = ["exchange_calendars.*", "jquantsapi.*", "qlib.*"]
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["jqqlib"]
+
+[tool.coverage.report]
+show_missing = true

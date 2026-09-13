@@ -1,0 +1,21 @@
+# Repository notes for coding agents
+
+- Python >=3.10,<3.13 (`.tool-versions` pins 3.12). Create a venv and run `python -m pip install -e ".[dev]"` from the repo root.
+- Canonical test: `python -m unittest discover -s tests`. The suite is unittest, not pytest.
+- Smoke: `jqqlib --help` (console script; `python -m jqqlib` is equivalent). `jqqlib --version` prints `jqqlib <version>`. `jqqlib init-config [PATH]` writes the packaged `config.example.yaml` (default `./config.yaml`; refuses to overwrite without `--force`). Configuration/argument errors exit 2 with `error: <message>` on stderr, no traceback.
+- Lint/type: `ruff check .` (line-length 120, E501 enforced) and `mypy` (configuration in `pyproject.toml`). CI runs tests, lint/type, and distribution checks.
+- mypy checks all of `src/jqqlib` (`[tool.mypy].files = ["src/jqqlib"]`, so new modules are picked up automatically); `scripts/` and `tests/` are not yet type-checked. CI job: `lint + type-check`. There is no global `ignore_missing_imports`; third parties without stubs are listed per module in `[[tool.mypy.overrides]]` — add a new entry only when mypy reports a missing stub, never a wildcard. Prefer small behaviour-neutral annotations over `# type: ignore`; if an ignore is unavoidable, add a reason comment.
+- Coverage: `coverage run -m unittest discover -s tests && coverage report` (config in `pyproject.toml`; `.coverage` is gitignored).
+- Version: `jqqlib.__version__` reads `importlib.metadata.version("jquants-qlib")` (falls back to `0+unknown` when not installed). The single source is `[project].version` in `pyproject.toml`; do not hard-code the version elsewhere. `src/jqqlib/py.typed` marks the package as typed and ships in the wheel. `CITATION.cff` carries the same version; bump both together.
+- Distribution: `python -m build`, `python -m twine check dist/*`; install the wheel in a fresh venv and run `scripts/dist_smoke.py` from outside the repo (see `docs/releasing.md`). The sdist ships the full `tests/` and `scripts/` trees; `python -m unittest discover -s tests` must pass from an extracted sdist. The wheel still omits `tests/`.
+- Tests do not need `JQUANTS_API_KEY` or `config.yaml`. Some tests skip without `git`. With `CI=1` set, `tests/test_cli.py` fails (instead of skipping) when the `jqqlib` console script is missing.
+- Python 3.10 CI leg locally: `uv venv --python 3.10 /tmp/jqqlib-py310 && uv pip install --python /tmp/jqqlib-py310/bin/python -e ".[dev]"` then `/tmp/jqqlib-py310/bin/python -m unittest discover -s tests`.
+- `config.yaml`, `data/`, `downloads/` are gitignored. Never commit J-Quants data or credentials.
+- Root `config.example.yaml` and the packaged copy `src/jqqlib/data/config.example.yaml` must stay byte-identical (a unittest checks this); edit both. Package data: `contracts/*.json`, `data/*.yaml`, `py.typed`.
+- Platform: POSIX only (macOS / Linux). Publishing uses symlinks and the credential lookup has a macOS Keychain branch; Windows is not supported.
+- Security reports: private vulnerability reporting is not enabled yet, so `SECURITY.md` points to the `security_report` issue template (`[security]` title prefix, no details in the issue body).
+- Schemas: `src/jqqlib/contracts/*.schema.json`; load via `jqqlib.contracts.load_schema`.
+- Package lives under `src/jqqlib` (src layout). Import as `jqqlib.<module>`.
+- Parquet stays raw and requires `adjustment_factor` (optional `ex_rights_type`). Qlib dump applies the vendor cumulative factor by default (`qlib.adjustment: vendor_factor`, emits `$factor`); `qlib.adjustment: none` keeps the six raw Qlib fields and no `factor` file. Do not store cumulative factors in Parquet. In `vendor_factor` mode the dump runs the same readiness checks as `validate` before writing (missing, non-finite, or ≤ 0 `adjustment_factor`, or missing OHLCV → `RuntimeError`; the CLI prints `error:` and exits 1). See `docs/jquants-price-adjustment.md`.
+- `src/jqqlib/qlib_dump.py` is adapted from microsoft/qlib `scripts/dump_bin.py` (MIT); `THIRD_PARTY_NOTICES.md` carries that licence text and is listed in `[project] license-files`.
+- `.editorconfig` sets charset, newlines, and indent. CI runs CodeQL (`security-and-quality` queries) on Python via `.github/workflows/codeql.yml`.

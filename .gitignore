@@ -1,0 +1,34 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.DS_Store
+.pytest_cache/
+.ruff_cache/
+.venv/
+.envrc
+.env
+
+# Live configuration (contains storage paths; credentials must never go here)
+config.yaml
+# Credential files that the upstream jquants-api-client reads from the current
+# directory or the home directory. jqqlib does not use them, but keep them out.
+jquants-api.toml
+.jquants-api/
+
+# Market data fetched from J-Quants. Never commit it: the J-Quants terms of
+# service do not allow redistribution, and it is reproducible from the API.
+/data/
+/downloads/
+mlruns/
+reports/
+
+# Tooling caches and local reports
+.coverage
+coverage.xml
+htmlcov/
+.mypy_cache/
+
+# oh-my-claudecode session state (plans, handoffs, artifacts)
+.omc/

@@ -1,0 +1,14 @@
+# Files added to the sdist on top of setuptools' defaults (README, LICENSE, pyproject, src/).
+include CHANGELOG.md
+include CONTRIBUTING.md
+include SECURITY.md
+include CODE_OF_CONDUCT.md
+include CITATION.cff
+include config.example.yaml
+include THIRD_PARTY_NOTICES.md
+recursive-include docs *.md
+# Ship the complete unittest suite (package, helpers, fixtures) and the checkout-only scripts
+# it imports, so the sdist can be tested with `python -m unittest discover -s tests`.
+graft tests
+graft scripts
+global-exclude __pycache__ *.py[cod] .DS_Store

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/iyoda/jquants-qlib/security/advisories/new
+    about: Do not open a public issue for security problems. Use private vulnerability reporting instead (see SECURITY.md). If that page has no "Report a vulnerability" button, use the "Security report (contact only)" template without any details.
