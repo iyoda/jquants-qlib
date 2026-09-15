@@ -182,7 +182,9 @@ class CliTests(unittest.TestCase):
                 encoding="utf-8",
             )
             result = run_cli("convert", "--config", str(path))
-            self.assertEqual(result.returncode, 1)
+            # A negative return code is a signal (e.g. -6 = SIGABRT); surface the
+            # captured stderr so a native crash at interpreter exit is diagnosable.
+            self.assertEqual(result.returncode, 1, msg=f"stderr:\n{result.stderr}")
             self.assertEqual(result.stdout, "")
             self.assertTrue(result.stderr.startswith("error: Parquet is not Qlib-ready:"), result.stderr)
             self.assertNotIn("Traceback", result.stderr)
