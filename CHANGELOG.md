@@ -35,6 +35,10 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
 - GitHub Actions are pinned to commit SHAs with `# vX.Y.Z` comments (Dependabot refreshes them);
   the CI `dist` job asserts sdist members and runs the unittest suite from the extracted sdist;
   `scripts/dist_smoke.py` checks the `factor` binary and `$factor` = 1.0 on the last date.
+- Branch model: `dev` is the default/integration branch; a merge into `master` runs the release
+  workflow, which releases `vX.Y.Z` from `pyproject.toml` when the tag is absent and the
+  CHANGELOG has a `## [X.Y.Z]` section (creating the tag with the GitHub Release). CI and CodeQL
+  run on `dev` and `master`; Dependabot targets `dev`.
 - `publish-check` compares against the configurable `publish_check.git_ref` (default
   `origin/main`) instead of a hard-coded branch.
 - `scripts/run_daily.sh` exports `JQQLIB_RUN_STARTED_AT`; `JQQLIB_CONFIG`, `JQQLIB_PYTHON` and

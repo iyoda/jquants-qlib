@@ -1,8 +1,12 @@
 name: Release
 
+# A release is a merge into `master`: the workflow reads `[project].version` from
+# pyproject.toml and, when the tag `vX.Y.Z` does not exist yet AND CHANGELOG.md has a
+# `## [X.Y.Z]` section, it builds, verifies, optionally publishes to PyPI, and creates the
+# GitHub Release (which creates the tag). Any other merge into `master` is a no-op here.
 on:
   push:
-    tags: ["v*"]
+    branches: [master]
 
 permissions:
   contents: read
@@ -12,8 +16,44 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  version:
     if: github.repository == 'iyoda/jquants-qlib'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      release: ${{ steps.resolve.outputs.release }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Resolve the release tag from pyproject.toml
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          version="$(python3 - <<'PYCODE'
+          import tomllib
+          with open("pyproject.toml", "rb") as stream:
+              print(tomllib.load(stream)["project"]["version"])
+          PYCODE
+          )"
+          tag="v${version}"
+          release=true
+          if gh api "repos/${GH_REPO}/git/ref/tags/${tag}" >/dev/null 2>&1; then
+            echo "Tag ${tag} already exists; nothing to release."
+            release=false
+          elif ! grep -qE "^## \[${version//./\\.}\]" CHANGELOG.md; then
+            echo "::warning::CHANGELOG.md has no '## [${version}]' section; not releasing ${tag}. Add the section (and CITATION.cff date-released) to release."
+            release=false
+          else
+            echo "Tag ${tag} does not exist and CHANGELOG has a [${version}] section; releasing."
+          fi
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+          echo "release=${release}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: version
+    if: needs.version.outputs.release == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -23,9 +63,9 @@ jobs:
           python-version: "3.12"
           cache: pip
       - run: python -m pip install -e ".[dev]"
-      - name: Check tag matches package version
+      - name: Check installed version matches the release tag
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ needs.version.outputs.tag }}
         run: |
           python - <<'PYCODE'
           import os
@@ -36,7 +76,7 @@ jobs:
           PYCODE
       - name: Extract release notes from CHANGELOG.md
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ needs.version.outputs.tag }}
         run: |
           python - <<'PYCODE'
           import os
@@ -95,8 +135,8 @@ jobs:
     # Opt-in: set the repository variable PUBLISH_TO_PYPI to "true" (Settings → Secrets and
     # variables → Actions → Variables) once the PyPI trusted publisher and the `pypi`
     # environment exist. Until then the job is skipped and the release is GitHub-only.
-    if: github.repository == 'iyoda/jquants-qlib' && vars.PUBLISH_TO_PYPI == 'true'
-    needs: build
+    if: needs.version.outputs.release == 'true' && vars.PUBLISH_TO_PYPI == 'true'
+    needs: [version, build]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: pypi
@@ -114,9 +154,10 @@ jobs:
     # (PUBLISH_TO_PYPI unset). A failed PyPI upload still blocks the GitHub Release.
     if: >-
       always() && github.repository == 'iyoda/jquants-qlib'
+      && needs.version.outputs.release == 'true'
       && needs.build.result == 'success'
       && (needs.pypi.result == 'success' || needs.pypi.result == 'skipped')
-    needs: [build, pypi]
+    needs: [version, build, pypi]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -130,15 +171,16 @@ jobs:
         with:
           name: release-notes
           path: notes
-      - name: Attach distributions to GitHub Release
+      - name: Create the GitHub Release (creates the tag) and attach distributions
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ needs.version.outputs.tag }}
+          TARGET_SHA: ${{ github.sha }}
         run: |
           if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
             gh release upload "$RELEASE_TAG" dist/* --clobber
           else
-            gh release create "$RELEASE_TAG" dist/* --verify-tag \
+            gh release create "$RELEASE_TAG" dist/* --target "$TARGET_SHA" \
               --title "$RELEASE_TAG" --notes-file notes/notes.md
           fi

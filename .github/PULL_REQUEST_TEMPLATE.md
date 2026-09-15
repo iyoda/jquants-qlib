@@ -1,5 +1,7 @@
 ## Summary
 
+Base branch: `dev` (only release pull requests go from `dev` to `master`).
+
 Describe the resulting behavior.
 
 ## Why
