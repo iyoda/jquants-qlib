@@ -8,6 +8,7 @@ authors:
 repository-code: "https://github.com/iyoda/jquants-qlib"
 license: MIT
 version: 0.1.0
+date-released: "2026-09-16"
 abstract: "Daily ETL from the J-Quants API to Parquet and a Qlib dataset for Japanese equities."
 keywords:
   - j-quants
