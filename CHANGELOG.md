@@ -6,6 +6,8 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-09-16
+
 ### Added
 
 - Initial public release: J-Quants Light daily ETL to deterministic raw Parquet and Qlib datasets,
