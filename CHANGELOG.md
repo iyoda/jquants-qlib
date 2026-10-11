@@ -6,6 +6,18 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- API retries no longer repeat 4xx client errors: `requests.HTTPError` subclasses `OSError`, so
+  401/403/404 (and the 400 that triggers the per-day fallback) were retried with backoff. Errors
+  carrying an HTTP status are now classified by status first; only 429/5xx are retried.
+- `run-daily` refuses `etl.merge_mode: replace` (exit 2), which cut the Parquet down to the daily
+  fetch window on every run.
+- Parquet writes (`run-etl`, `run-all`, `run-daily`, `bootstrap-csv`) run the `validate` readiness
+  checks on the merged rows first and leave the Parquet unchanged on failure (exit 1). Previously
+  rejected rows (e.g. `AdjFactor` 0) were written before the dump refused them, so `run-daily`
+  resumed after them and failed on every later run.
+
 ## [0.1.0] - 2026-09-16
 
 ### Added

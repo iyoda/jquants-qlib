@@ -166,6 +166,38 @@ class RunDailyTests(unittest.TestCase):
 
         self.assertEqual(calls, [(dt.date(2026, 6, 3), dt.date(2026, 6, 5))])
 
+    def test_default_daily_runner_refuses_replace_merge_mode(self) -> None:
+        # replace would cut the Parquet down to the daily fetch window on every run.
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.yaml"
+            config_path.write_text(yaml.safe_dump({
+                "storage": {"parquet_dir": str(Path(tmp) / "parquet"), "qlib_dir": str(Path(tmp) / "qlib")},
+                "etl": {"merge_mode": "replace"},
+            }), encoding="utf-8")
+
+            with (
+                mock.patch("jqqlib.pipeline.run_all") as run_all,
+                self.assertRaisesRegex(ValueError, "run-daily requires etl.merge_mode: upsert"),
+            ):
+                run_daily(config_path, dt.date(2026, 6, 5), dataset_end_reader=lambda _: dt.date(2026, 6, 4))
+
+        run_all.assert_not_called()
+
+    def test_default_daily_runner_runs_all_with_upsert(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.yaml"
+            config_path.write_text(yaml.safe_dump({
+                "storage": {"parquet_dir": str(Path(tmp) / "parquet"), "qlib_dir": str(Path(tmp) / "qlib")},
+            }), encoding="utf-8")
+
+            with mock.patch("jqqlib.pipeline.run_all") as run_all:
+                target_date = run_daily(
+                    config_path, dt.date(2026, 6, 5), dataset_end_reader=lambda _: dt.date(2026, 6, 2)
+                )
+
+        self.assertEqual(target_date, dt.date(2026, 6, 5))
+        run_all.assert_called_once_with(config_path, dt.date(2026, 6, 3), dt.date(2026, 6, 5))
+
     def test_catch_up_start_date_uses_target_when_dataset_is_current(self) -> None:
         self.assertEqual(
             catch_up_start_date(dt.date(2026, 6, 5), dt.date(2026, 6, 5)),

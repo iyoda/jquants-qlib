@@ -94,7 +94,7 @@ security find-generic-password -s jquants-api-key >/dev/null && echo present || 
 | `storage.audit_dir` | `./data/audit` | `last_audit.json` 保存先 |
 | `universe.codes` | `[]` | 対象コード。空なら API 取得時の銘柄絞り込みなし |
 | `etl.chunk_days` | `30` | API の日付チャンク幅、1 以上 |
-| `etl.merge_mode` | `upsert` | `(symbol,date)` 上書きマージ。`replace` は置換 |
+| `etl.merge_mode` | `upsert` | `(symbol,date)` 上書きマージ。`replace` は置換（`run-daily` では履歴が消えるため拒否） |
 | `etl.retries` | `3` | 一時エラーの再試行回数、0 以上 |
 | `etl.retry_base_delay_sec` | `1.0` | 指数バックオフの初期待機秒 |
 | `etl.retry_max_delay_sec` | `8.0` | 待機秒の上限、初期待機以上 |
