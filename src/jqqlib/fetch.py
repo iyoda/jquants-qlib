@@ -175,11 +175,22 @@ _TRANSIENT_STATUSLESS_RE = re.compile(
 )
 
 
+_TRANSIENT_STATUSES = frozenset({429, 500, 502, 503, 504})
+
+
+def _error_status(error: Exception) -> int | None:
+    """HTTP status attached to an API error (``status_code`` or ``response.status_code``), if any."""
+    status = getattr(error, "status_code", None)
+    if status is None:
+        status = getattr(getattr(error, "response", None), "status_code", None)
+    return status if isinstance(status, int) else None
+
+
 def _is_transient_statusless(error: Exception) -> bool:
     """True for status-less errors that look like a transient network blip.
 
     Note: connection/timeout errors from requests subclass OSError and are
-    already handled by the typed ``except`` clause in call_jquants_with_retry;
+    already handled by the typed check in call_jquants_with_retry;
     this fuzzy message match only covers the residual status-less cases that
     carry no usable type or status_code.
     """
@@ -199,9 +210,10 @@ def call_jquants_with_retry(
     """Call J-Quants API with exponential backoff retry.
 
     Retries on transient exceptions only and raises the last exception if exhausted.
-    Transient = timeouts/connection/OS errors, HTTP 429/5xx, and (when
-    ``retry_statusless`` is set) status-less network blips. Auth failures
-    (401/403) and any other status-bearing error fail fast.
+    Transient = HTTP 429/5xx, timeouts/connection/OS errors that carry no HTTP
+    status, and (when ``retry_statusless`` is set) status-less network blips.
+    Auth failures (401/403) and any other status-bearing error fail fast, even
+    when raised as ``requests.HTTPError`` (an ``OSError`` subclass).
     """
     import requests
 
@@ -215,31 +227,24 @@ def call_jquants_with_retry(
     for attempt in range(retries + 1):
         try:
             return api_call()
-        except (TimeoutError, ConnectionError, OSError, requests.exceptions.RetryError) as e:
+        except Exception as e:
+            # Classify by HTTP status first: requests.HTTPError subclasses
+            # OSError, so an OSError check ahead of this would retry 401/403/404.
+            status = _error_status(e)
+            if status is not None:
+                transient = status in _TRANSIENT_STATUSES
+            elif isinstance(e, (TimeoutError, ConnectionError, OSError, requests.exceptions.RetryError)):
+                transient = True
+            else:
+                # Status-less network blips that carry no usable type.
+                transient = retry_statusless and _is_transient_statusless(e)
+
+            if not transient:
+                raise
             last_error = e
             if attempt >= retries:
                 break
             _backoff(attempt)
-        except Exception as e:
-            # Retry common transient HTTP-style errors (429/5xx).
-            status = getattr(e, "status_code", None)
-            if status is None:
-                response = getattr(e, "response", None)
-                status = getattr(response, "status_code", None)
-
-            transient = status in {429, 500, 502, 503, 504}
-            # Status-less network blips: retry only when no status is attached
-            # (so 401/403 and other status-bearing errors still fail fast).
-            if not transient and status is None and retry_statusless and _is_transient_statusless(e):
-                transient = True
-
-            if transient:
-                last_error = e
-                if attempt >= retries:
-                    break
-                _backoff(attempt)
-                continue
-            raise
 
     if last_error is None:
         raise RuntimeError("Retry logic reached unexpected state without captured error.")
@@ -331,11 +336,7 @@ def fetch_daily_quotes(
                         sleeper=sleeper,
                     )
                 except Exception as exc:
-                    status = getattr(exc, "status_code", None)
-                    if status is None:
-                        response_obj = getattr(exc, "response", None)
-                        status = getattr(response_obj, "status_code", None)
-                    if status != 400:
+                    if _error_status(exc) != 400:
                         raise
 
                     frames_for_days: list[pd.DataFrame] = []

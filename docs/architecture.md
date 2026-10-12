@@ -47,8 +47,9 @@ Qlib の `$factor` と調整済み価格・出来高を出します。配当は�
 - `src/jqqlib/contracts/`: JSON schema を同梱し `jqqlib.contracts.load_schema` で提供
 - `src/jqqlib/data/config.example.yaml`: `init-config` が書き出す設定例（ルートの `config.example.yaml` と同一内容）
 
-`validate` は変換元の列・値・重複などの入力品質をスタンドアロンで検査します。dump
-（`convert` / `run-all` / `run-daily` / `bootstrap-csv`）は既定の `vendor_factor` で
+`validate` は変換元の列・値・重複などの入力品質をスタンドアロンで検査します。Parquet の
+書き込み（`run-etl` / `run-all` / `run-daily` / `bootstrap-csv`）はマージ後のデータに、dump
+（`convert` / `run-all` / `run-daily` / `bootstrap-csv`）は既定の `vendor_factor` で、
 同じ readiness 検査を書き込み前に実行します。`manifest` は生成物の lineage と
 品質結果、`audit` は直近営業日の欠損を扱います。schema のソースは
 `src/jqqlib/contracts/` です。[artifact の詳細](operations.md#5-dataset-artifacts)を参照してください。

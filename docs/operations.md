@@ -75,14 +75,15 @@ jqqlib run-etl --config config.yaml --start 2020-01-01 --end 2020-12-31
 
 リトライ方針（現在実装）:
 
-- 対象: `TimeoutError`, `ConnectionError`, `OSError`, HTTP `429/500/502/503/504`
+- 対象: HTTP `429/500/502/503/504`、HTTP ステータスを持たない `TimeoutError` / `ConnectionError` / `OSError`（`requests` の接続エラーなど）
 - 方式: 指数バックオフ + ジッター
 - 設定: `etl.retries`, `etl.retry_base_delay_sec`, `etl.retry_max_delay_sec`, `etl.retry_jitter_sec`
-- 非リトライ: 4xx の恒久エラー（例: 400/401/403/404）
+- 非リトライ: 4xx の恒久エラー（例: 400/401/403/404）。`requests.HTTPError` は `OSError` のサブクラスですが、ステータスで判定するため再試行しません
 
 実運用で追加で考慮すると良い点（本実装で対応済み）:
 
-- `etl.merge_mode: upsert`（既定）で、差分取得時に既存Parquetを `(symbol, date)` キーで上書きマージ
+- `etl.merge_mode: upsert`（既定）で、差分取得時に既存Parquetを `(symbol, date)` キーで上書きマージ（`run-daily` は `replace` を拒否します）
+- 書き込み前にマージ後のデータへ `validate` と同じ readiness 検査を行い、不合格なら Parquet を変更せず exit 1
 - Parquet出力は一時ファイル経由で原子的に置換（途中失敗時の破損リスク低減）
 
 おすすめ運用:
@@ -254,7 +255,7 @@ Python module ではなく、これらの JSON artifact を読む前提です。
 
 実行を取りこぼした日があっても、次回実行時に直近営業日から lookback し未取得期間を range で取り込むため、短期の取りこぼしは日次ジョブ側で吸収します。ただし吸収できるのは概ね lookback 窓（既定で約 10 営業日 ≒ 2 週間）までです。それを超える長期停止後は、`--max-lookback-business-days` を大きくした手動 `run-daily` で穴埋めしてください。
 
-catch-up は対象営業日を含む `[start, target]` を 1 回の range fetch で取得します（`write_parquet` は tmp+rename の atomic 書き込みのため、途中失敗時は何も書かれず、次回実行で再取得されます）。`write_parquet` は書き込み前に `symbol, date` で安定ソートするため、同一内容なら fetch 窓や順序に依らず同一バイト列・同一 `parquet_sha256` になります（pandas/pyarrow のアップグレード時のみ、内容が同じでも 1 回だけ余分に publish され得ます）。
+catch-up は対象営業日を含む `[start, target]` を 1 回の range fetch で取得します。`write_parquet` はマージ後のデータを `validate` と同じ readiness 検査にかけてから tmp+rename で atomic に書き込むため、取得の途中失敗や不正データ（例: `AdjFactor` が 0）では Parquet は変わらず、次回実行で同じ期間から再取得されます。Qlib dump だけが失敗した場合は Parquet が先に進みますが、dump は毎回 Parquet 全体から再生成するため、次に成功した実行で反映されます。`run-daily` は `etl.merge_mode: upsert` が必須です（`replace` は取得窓以外の履歴を消すため exit 2 で拒否）。`write_parquet` は書き込み前に `symbol, date` で安定ソートするため、同一内容なら fetch 窓や順序に依らず同一バイト列・同一 `parquet_sha256` になります（pandas/pyarrow のアップグレード時のみ、内容が同じでも 1 回だけ余分に publish され得ます）。
 
 ```bash
 jqqlib run-daily --config config.yaml
