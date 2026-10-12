@@ -370,11 +370,6 @@ class PublishCheckDecision:
     git_ref: str = "origin/main"
 
 
-def _manifest_repo_relpath(config: dict) -> str:
-    tracked = Path(config["storage"]["qlib_dir"]) / DATASET_MANIFEST_FILENAME
-    return os.path.normpath(str(tracked)).replace(os.sep, "/")
-
-
 def _manifest_path(config: dict) -> Path:
     return Path(config["storage"]["qlib_dir"]) / DATASET_MANIFEST_FILENAME
 
@@ -395,14 +390,63 @@ def _read_json_object(path: Path, artifact_name: str) -> tuple[dict[str, Any] | 
     return payload, None
 
 
+class _GitLookupError(Exception):
+    """The committed manifest could not be looked up (as opposed to: it is absent)."""
+
+
+def _git(args: list[str], cwd: Path | None) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    except OSError as exc:
+        raise _GitLookupError(f"git is not available: {exc}") from exc
+
+
+def _git_toplevel() -> Path:
+    result = _git(["rev-parse", "--show-toplevel"], cwd=None)
+    if result.returncode != 0:
+        raise _GitLookupError(f"not inside a git work tree: {result.stderr.strip()}")
+    return Path(result.stdout.strip())
+
+
+def _manifest_repo_relpath(config: dict, toplevel: Path) -> str:
+    """Path of the working-tree manifest relative to the git work tree root.
+
+    ``git show <ref>:<path>`` resolves ``path`` from the repository root, not
+    from the current directory, so an absolute ``storage.qlib_dir`` or a run
+    from a subdirectory must be mapped first. Symlinks are kept (a committed
+    provider symlink is followed in git, below); the resolved path is only a
+    fallback for an absolute path spelled through a symlinked directory.
+    """
+    tracked = Path(os.path.abspath(Path(config["storage"]["qlib_dir"]) / DATASET_MANIFEST_FILENAME))
+    root = toplevel.resolve()
+    for candidate in (tracked, tracked.resolve()):
+        try:
+            return candidate.relative_to(root).as_posix()
+        except ValueError:
+            continue
+    raise _GitLookupError(f"dataset manifest {tracked} is outside the git work tree {root}")
+
+
 def _committed_parquet_sha256(config: dict) -> str | None:
-    rel = _manifest_repo_relpath(config)
+    """Return ``lineage.parquet_sha256`` committed on ``publish_check.git_ref``.
+
+    ``None`` means the ref has no manifest at that path (a first publish).
+    Raises ``_GitLookupError`` when the lookup itself cannot run (no git, not a
+    work tree, unknown ref, manifest outside the work tree): treating those as a
+    first publish would report "changed" on every run.
+    """
     ref = publish_check_git_ref(config)
+    toplevel = _git_toplevel()
+    if _git(["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd=toplevel).returncode != 0:
+        raise _GitLookupError(
+            f"publish_check.git_ref {ref!r} does not name a commit; fetch it or fix publish_check.git_ref"
+        )
+    rel = _manifest_repo_relpath(config, toplevel)
 
     def resolve_git_path(path: str, depth: int = 0) -> str | None:
         if depth > 8:
             return None
-        result = subprocess.run(["git", "show", f"{ref}:{path}"], capture_output=True, text=True)
+        result = _git(["show", f"{ref}:{path}"], cwd=toplevel)
         if result.returncode == 0:
             return result.stdout
         parts = Path(path).parts
@@ -410,16 +454,14 @@ def _committed_parquet_sha256(config: dict) -> str | None:
         # provider path committed as a symlink to a build directory still resolves.
         for size in range(len(parts) - 1, 0, -1):
             prefix = "/".join(parts[:size])
-            tree = subprocess.run(
-                ["git", "ls-tree", ref, "--", prefix], capture_output=True, text=True
-            )
+            tree = _git(["ls-tree", ref, "--", prefix], cwd=toplevel)
             entry = tree.stdout.strip().splitlines()
             if tree.returncode != 0 or len(entry) != 1:
                 continue
             mode = entry[0].split(None, 1)[0]
             if mode != "120000":
                 continue
-            probe = subprocess.run(["git", "show", f"{ref}:{prefix}"], capture_output=True, text=True)
+            probe = _git(["show", f"{ref}:{prefix}"], cwd=toplevel)
             if probe.returncode != 0:
                 continue
             target = probe.stdout.strip()
@@ -530,7 +572,14 @@ def evaluate_publish_check(config_path: Path) -> PublishCheckDecision:
             quality_status=str(report_status),
         )
 
-    committed = _committed_parquet_sha256(config)
+    try:
+        committed = _committed_parquet_sha256(config)
+    except _GitLookupError as exc:
+        return _publish_check_error(
+            f"cannot read the committed manifest: {exc}",
+            current_hash=current,
+            quality_status=str(report_status),
+        )
     warning_summary = _quality_warning_summary(report)
     changed = decide_publish(current, committed)
     return PublishCheckDecision(
@@ -746,21 +795,37 @@ def _teardown_cli_logging() -> None:
     root.propagate = True
 
 
+def cli_error_exit_code(exc: BaseException) -> int:
+    """Exit code for an error reported as one ``error:`` line: 1 = run failure, 2 = user error.
+
+    ``ValueError``/``OSError`` are user errors (unreadable/invalid config, bad
+    arguments, refused overwrite) except for the subclasses that report a
+    failed run instead: no data fetched, J-Quants API/network errors
+    (``requests`` exceptions subclass ``OSError``), and unreadable Parquet
+    (pyarrow errors subclass ``ValueError``). ``RuntimeError`` is a dataset-state
+    failure (e.g. data that is not Qlib-ready), reported like a failed check.
+    """
+    if isinstance(exc, (RuntimeError, NoDataFetchedError)):
+        return 1
+    # Only consult libraries that are already loaded: an exception of a type
+    # from a module that was never imported cannot be this one.
+    for module_name, class_name in (("requests", "RequestException"), ("pyarrow", "ArrowException")):
+        error_class = getattr(sys.modules.get(module_name), class_name, None)
+        if isinstance(error_class, type) and isinstance(exc, error_class):
+            return 1
+    return 2
+
+
 def main() -> None:
     args = build_parser().parse_args()
     _configure_cli_logging()
     try:
         _dispatch(args)
-    except (ValueError, OSError) as exc:
-        # User-facing failures (unreadable/invalid config, bad arguments, refused
-        # overwrite) get a one-line message instead of a traceback.
+    except (ValueError, OSError, RuntimeError) as exc:
+        # One line on stderr instead of a traceback; the exit code separates
+        # user errors (2) from failed runs (1), see cli_error_exit_code.
         print(f"error: {exc}", file=sys.stderr)
-        raise SystemExit(2) from None
-    except RuntimeError as exc:
-        # Dataset-state failures (e.g. a Qlib dump that produced no provider
-        # subtree) are reported like a failed check, not as a crash.
-        print(f"error: {exc}", file=sys.stderr)
-        raise SystemExit(1) from None
+        raise SystemExit(cli_error_exit_code(exc)) from None
     finally:
         _teardown_cli_logging()
 

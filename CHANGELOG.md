@@ -17,6 +17,32 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
   checks on the merged rows first and leave the Parquet unchanged on failure (exit 1). Previously
   rejected rows (e.g. `AdjFactor` 0) were written before the dump refused them, so `run-daily`
   resumed after them and failed on every later run.
+- `publish-check` reports an error (exit 1) instead of "changed" (exit 0) when it cannot look up
+  the committed manifest: `git` missing, not a git work tree, or a `publish_check.git_ref` that
+  does not name a commit. It also maps the manifest path to the repository root, so an absolute
+  `storage.qlib_dir` or a run from a subdirectory no longer reports "changed" on every run.
+- The Qlib subtree swap restores the previous `features` / `calendars` / `instruments` when it is
+  interrupted (e.g. Ctrl-C), and keeps the backups if the restore itself fails; previously an
+  interrupt deleted them.
+- The Qlib dump stages its build next to the resolved `storage.qlib_dir`, so a `qlib_dir` that is
+  a symlink to another filesystem no longer fails with `Invalid cross-device link`.
+
+### Changed
+
+- **Breaking (CLI exit codes):** J-Quants API / network errors (`requests` exceptions), no data
+  within the `run-daily` lookback, and unreadable Parquet now exit 1 (failed run) instead of 2.
+  Exit 2 is left to configuration and argument errors and the XTKS calendar outage of
+  `run-daily` / `audit`, so a wrapper can treat 2 as "fix the setup" and 1 as "the run failed".
+  The fundamentals CLI follows the same mapping and reports runtime errors as one `error:` line
+  instead of a traceback. `publish-check` now exits 1 where it used to exit 0 when the committed
+  manifest cannot be looked up (see Fixed).
+  - Affected: wrappers or monitors that branch on exit code 2 for API outages or "no data", or
+    that rely on `publish-check` exit 0 with a missing or unfetched `publish_check.git_ref`.
+  - Required changes: alert on exit 1 for those cases; make sure `publish_check.git_ref` exists
+    (fetch it, or push an initial commit before the first publish).
+  - Data: no regeneration needed; Parquet, Qlib datasets and artifacts are unchanged.
+  - Validate / roll back: `jqqlib publish-check --config config.yaml; echo $?` should print 0 or 3
+    on a healthy setup. Rolling back to 0.1.0 restores the previous codes.
 
 ## [0.1.0] - 2026-09-16
 

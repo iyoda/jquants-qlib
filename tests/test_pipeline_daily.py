@@ -9,11 +9,14 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import pyarrow as pa
+import requests
 import yaml
 
 from jqqlib.audit import GapAuditResult
 from jqqlib.pipeline import (
     catch_up_start_date,
+    cli_error_exit_code,
     iter_recent_business_dates,
     main,
     parse_as_of_date,
@@ -309,6 +312,40 @@ class EtlConfigValidationTests(unittest.TestCase):
     def test_rejects_unsupported_merge_mode(self) -> None:
         with self.assertRaisesRegex(ValueError, "etl.merge_mode"):
             validate_etl_config({"etl": {"merge_mode": "append"}})
+
+
+class CliExitCodeTests(unittest.TestCase):
+    def test_user_errors_exit_2(self) -> None:
+        for exc in (ValueError("etl.retries must be 0 or greater."), FileNotFoundError("config.yaml")):
+            with self.subTest(exc=type(exc).__name__):
+                self.assertEqual(cli_error_exit_code(exc), 2)
+
+    def test_run_failures_exit_1(self) -> None:
+        response = requests.Response()
+        response.status_code = 503
+        failures = (
+            RuntimeError("Parquet is not Qlib-ready"),
+            NoDataFetchedError("No data fetched"),
+            requests.HTTPError("503", response=response),
+            requests.ConnectionError("Max retries exceeded"),
+            pa.ArrowInvalid("Parquet magic bytes not found"),
+        )
+        for exc in failures:
+            with self.subTest(exc=type(exc).__name__):
+                self.assertEqual(cli_error_exit_code(exc), 1)
+
+    def test_run_daily_without_data_exits_1_not_as_a_config_error(self) -> None:
+        stderr = io.StringIO()
+        with (
+            mock.patch("sys.argv", ["jqqlib", "run-daily", "--config", "config.yaml", "--as-of", "2026-06-05"]),
+            mock.patch("jqqlib.pipeline.run_daily", side_effect=NoDataFetchedError("No data fetched for any day")),
+            contextlib.redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            main()
+
+        self.assertEqual(raised.exception.code, 1)
+        self.assertEqual(stderr.getvalue(), "error: No data fetched for any day\n")
 
 
 if __name__ == "__main__":

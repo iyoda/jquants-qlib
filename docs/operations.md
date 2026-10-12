@@ -162,7 +162,10 @@ contract だけで、`data/`（Parquet・Qlib feature bin・calendars・instrume
 `dataset_manifest.json` / `dataset_quality_report.json` は数 KB の JSON で価格データを
 含まないため、自分の（private な）運用リポジトリで履歴管理することができます。
 `publish-check` は `publish_check.git_ref`（既定 `origin/main`）上の `lineage.parquet_sha256` と
-比較して内容が変わったときだけ commit すべきかを判定します（変更なしは exit 3）。その運用リポジトリの
+比較して内容が変わったときだけ commit すべきかを判定します（変更なしは exit 3）。manifest のパスは
+git の作業ツリーのルート基準に変換して引くため、`storage.qlib_dir` が絶対パスでもサブディレクトリから
+実行しても同じ結果になります。`git_ref` 上にその manifest が無ければ初回 publish（exit 0）ですが、
+`git_ref` 自体を引けない場合は exit 1 です。その運用リポジトリの
 `.gitignore` は次のように、この 2 つの JSON だけを残してデータ本体を除外してください。
 
 ```gitignore
@@ -326,8 +329,8 @@ Parquet と Qlib dataset は同じ入力から決定的に再生成できます
 | exit | 意味 | 主なコマンド |
 | --- | --- | --- |
 | 0 | 成功（`publish-check` は「内容が変わった」） | 全コマンド |
-| 1 | 検査で問題を検出（`validate` の品質エラー、`audit` の欠損、`publish-check` の manifest 異常）、または Qlib dump が provider subtree を作らなかったなどの dataset 状態の異常 | `validate` / `audit` / `publish-check` ほか取得・変換系コマンド |
-| 2 | ユーザー側の誤り（設定ファイルが無い・必須キー不足・値が不正・`init-config` の上書き拒否・`publish` の build ディレクトリ不在／実ディレクトリの置換拒否）。`error: <message>` を stderr に出し traceback は出しません。`run-daily` / `audit` の XTKS カレンダー不可（`... XTKS trading calendar unavailable: ...`、監査未実施）も exit 2 | 全コマンド |
+| 1 | 検査で問題を検出（`validate` の品質エラー、`audit` の欠損、`publish-check` の manifest 異常や git 参照の失敗）、dataset 状態の異常（Qlib-ready でないデータ、Qlib dump が provider subtree を作らなかった、Parquet が読めない）、または実行時の失敗（J-Quants API・通信エラー、lookback 内にデータが無い） | `validate` / `audit` / `publish-check` ほか取得・変換系コマンド |
+| 2 | ユーザー側の誤り（設定ファイルが無い・必須キー不足・値が不正・`init-config` の上書き拒否・`publish` の build ディレクトリ不在／実ディレクトリの置換拒否）。API・通信エラーは含みません。`error: <message>` を stderr に出し traceback は出しません。`run-daily` / `audit` の XTKS カレンダー不可（`... XTKS trading calendar unavailable: ...`、監査未実施）も exit 2 | 全コマンド |
 | 3 | `publish-check` で変更なし（失敗ではない） | `publish-check` |
 
 argparse の引数エラー（未知のコマンド、`--config` 欠落など）も exit 2 ですが、こちらは
@@ -358,6 +361,9 @@ argparse の usage メッセージが出ます。
 - 運用リポジトリへの manifest 反映で `publish-check` が exit 3 なら「変更なし」であり失敗ではありません。
   exit 1（`publish-check error: ...`）は manifest / quality report が読めない、`lineage.parquet_sha256`
   が無い、quality status が `fail` などの状態なので、原因を解消し `convert` で再生成してから再実行します。
+  `cannot read the committed manifest: ...` は比較先を引けない状態です（`git` が無い、git の作業ツリー外、
+  `publish_check.git_ref` が commit を指さない＝未 fetch や誤記、manifest が作業ツリー外）。
+  初回 publish の前でも `git_ref` は存在する必要があるので、先に空の初期 commit を push しておきます。
 
 ### 監査 sidecar（`last_audit.json`）が無い・古いとき
 
