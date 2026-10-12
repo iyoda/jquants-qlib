@@ -222,6 +222,21 @@ def run_all(config_path: Path, start_date: dt.date, end_date: dt.date) -> None:
     )
 
 
+def run_incremental(config_path: Path, start_date: dt.date, end_date: dt.date) -> None:
+    """``run_all`` for ``run-daily``: refuses ``etl.merge_mode: replace``.
+
+    The daily fetch window covers only the catch-up range, so replacing the
+    Parquet with it would discard all earlier history on every run.
+    """
+    config = load_config(config_path)
+    if _etl_config(config)["merge_mode"] != "upsert":
+        raise ValueError(
+            "run-daily requires etl.merge_mode: upsert; replace would discard the dataset history "
+            "outside the daily fetch window."
+        )
+    run_all(config_path, start_date, end_date)
+
+
 def read_existing_dataset_end(config_path: Path) -> dt.date | None:
     import pandas as pd
 
@@ -266,7 +281,7 @@ def run_daily(
     config_path: Path,
     as_of: dt.date,
     max_lookback_business_days: int = 10,
-    runner: RunAllCallable = run_all,
+    runner: RunAllCallable = run_incremental,
     dataset_end_reader: DatasetEndReader = read_existing_dataset_end,
 ) -> dt.date:
     last_no_data: NoDataFetchedError | None = None
@@ -276,12 +291,13 @@ def run_daily(
         start_date = catch_up_start_date(existing_dataset_end, target_date)
         try:
             # Fetch the full contiguous range [start_date, target_date] in a single
-            # call. write_parquet is atomic (tmp+replace) and the manifest derives
-            # its date_end from actual parquet content, so a failure here writes
-            # nothing and leaves the dataset end unchanged for the next run to
-            # refill -- no silently-advanced manifest with a hole. A run that
-            # finds no data anywhere in the range still raises NoDataFetchedError
-            # to drive the previous-business-day fallback below.
+            # call. write_parquet validates the merged rows before its atomic
+            # (tmp+replace) write, so a failed fetch or rejected data leaves the
+            # Parquet end unchanged for the next run to refill. A later Qlib dump
+            # failure leaves the Parquet ahead, but every dump rebuilds the
+            # provider from the whole Parquet, so the next successful run covers
+            # it. A run that finds no data anywhere in the range still raises
+            # NoDataFetchedError to drive the previous-business-day fallback below.
             if start_date < target_date:
                 logger.info(
                     "Catching up missing range %s to %s.",

@@ -11,6 +11,7 @@ from .normalize import (
     normalize_daily_quote_columns,
     normalize_for_qlib,
 )
+from .validate import qlib_readiness_errors
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -65,6 +66,13 @@ def write_parquet(df: pd.DataFrame, parquet_dir: Path, merge_mode: str = "replac
     # bytes so that the parquet content hash (lineage.parquet_sha256) is a stable
     # publish/no-op signal regardless of fetch order or fetch window.
     to_write = to_write[columns].sort_values(["symbol", "date"]).reset_index(drop=True)
+
+    # Validate before replacing the file: rows that fail the readiness checks
+    # would otherwise stay in the Parquet, and run-daily (which resumes after
+    # the Parquet's last date) would never re-fetch them, failing every run.
+    errors = qlib_readiness_errors(to_write)
+    if errors:
+        raise RuntimeError(f"Data is not Qlib-ready; {output_path} left unchanged: " + "; ".join(errors))
 
     _write_parquet_atomic(to_write, output_path)
     return output_path
