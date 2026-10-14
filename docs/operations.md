@@ -329,8 +329,8 @@ Parquet と Qlib dataset は同じ入力から決定的に再生成できます
 | exit | 意味 | 主なコマンド |
 | --- | --- | --- |
 | 0 | 成功（`publish-check` は「内容が変わった」） | 全コマンド |
-| 1 | 検査で問題を検出（`validate` の品質エラー、`audit` の欠損、`publish-check` の manifest 異常や git 参照の失敗）、dataset 状態の異常（Qlib-ready でないデータ、Qlib dump が provider subtree を作らなかった、Parquet が読めない）、または実行時の失敗（J-Quants API・通信エラー、lookback 内にデータが無い） | `validate` / `audit` / `publish-check` ほか取得・変換系コマンド |
-| 2 | ユーザー側の誤り（設定ファイルが無い・必須キー不足・値が不正・`init-config` の上書き拒否・`publish` の build ディレクトリ不在／実ディレクトリの置換拒否）。API・通信エラーは含みません。`error: <message>` を stderr に出し traceback は出しません。`run-daily` / `audit` の XTKS カレンダー不可（`... XTKS trading calendar unavailable: ...`、監査未実施）も exit 2 | 全コマンド |
+| 1 | 検査で問題を検出（`validate` の品質エラー、`audit` の欠損、`publish-check` の manifest 異常や git 参照の失敗）、dataset 状態の異常（Qlib-ready でないデータ、Qlib dump が provider subtree を作らなかった、Parquet が読めない）、または実行時の失敗（J-Quants API・通信エラー、lookback 内にデータが無い、財務データが取得できない） | `validate` / `audit` / `publish-check` ほか取得・変換系コマンド |
+| 2 | ユーザー側の誤り（設定ファイルが無い・必須キー不足・値が不正・`init-config` の上書き拒否・`publish` の build ディレクトリ不在／実ディレクトリの置換拒否、API キーが拒否された HTTP 401/403）。それ以外の API・通信エラーは含みません。`error: <message>` を stderr に出し traceback は出しません。`run-daily` / `audit` の XTKS カレンダー不可（`... XTKS trading calendar unavailable: ...`、監査未実施）も exit 2 | 全コマンド |
 | 3 | `publish-check` で変更なし（失敗ではない） | `publish-check` |
 
 argparse の引数エラー（未知のコマンド、`--config` 欠落など）も exit 2 ですが、こちらは

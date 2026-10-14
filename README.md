@@ -170,7 +170,7 @@ Python 3.10–3.12（[.tool-versions](.tool-versions) は 3.12）。macOS / Linu
 | `fundamentals_pipeline`（実験的） | 株価 CLI とは別 module の財務データ ETL（PIT パネル）。`python -m jqqlib.fundamentals_pipeline --help` |
 
 設定ファイルや引数の誤りは `error: <message>`（stderr）と exit 2 で終了し、traceback は出ません。
-`validate` の品質エラー・`audit` の欠損・`publish-check` の manifest 異常・取得や変換の dataset 状態異常・J-Quants API や通信の失敗は exit 1、
+`validate` の品質エラー・`audit` の欠損・`publish-check` の manifest 異常・取得や変換の dataset 状態異常・J-Quants API や通信の失敗（認証エラー 401/403 は exit 2）は exit 1、
 カレンダー不可と `publish` の置換拒否は exit 2、`publish-check` の変更なしは exit 3 です
 （[exit code の一覧](docs/operations.md#exit-code-の見方)）。
 実行例と cron は [運用ガイド](docs/operations.md)、障害時の手順は

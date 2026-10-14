@@ -21,7 +21,7 @@ from . import __version__
 from .audit import GapAuditResult, audit_dataset_gaps, write_audit_sidecar
 from .config import load_config, publish_check_git_ref, qlib_adjustment
 from .dump import parquet_to_qlib
-from .fetch import create_jquants_client, fetch_bulk_daily_quotes, fetch_daily_quotes
+from .fetch import _error_status, create_jquants_client, fetch_bulk_daily_quotes, fetch_daily_quotes
 from .manifest import (
     DATASET_MANIFEST_FILENAME,
     DATASET_QUALITY_REPORT_FILENAME,
@@ -48,6 +48,7 @@ RunAllCallable = Callable[[Path, dt.date, dt.date], None]
 DatasetEndReader = Callable[[Path], dt.date | None]
 VALID_MERGE_MODES = {"replace", "upsert"}
 QUALITY_STATUSES = {"pass", "warning", "fail"}
+_AUTH_STATUSES = frozenset({401, 403})
 
 
 def _coerce_int(etl_conf: dict[str, Any], key: str, default: int) -> int:
@@ -413,17 +414,18 @@ def _manifest_repo_relpath(config: dict, toplevel: Path) -> str:
 
     ``git show <ref>:<path>`` resolves ``path`` from the repository root, not
     from the current directory, so an absolute ``storage.qlib_dir`` or a run
-    from a subdirectory must be mapped first. Symlinks are kept (a committed
-    provider symlink is followed in git, below); the resolved path is only a
-    fallback for an absolute path spelled through a symlinked directory.
+    from a subdirectory must be mapped first. Only the longest leading part
+    that resolves to the work tree root is replaced: an absolute path spelled
+    through a symlink (macOS ``/var`` -> ``/private/var``) still maps, while
+    symlinks inside the repository (the ``publish`` provider link) stay in the
+    git path and are followed in git, below.
     """
     tracked = Path(os.path.abspath(Path(config["storage"]["qlib_dir"]) / DATASET_MANIFEST_FILENAME))
     root = toplevel.resolve()
-    for candidate in (tracked, tracked.resolve()):
-        try:
-            return candidate.relative_to(root).as_posix()
-        except ValueError:
-            continue
+    parts = tracked.parts
+    for size in range(len(parts) - 1, 0, -1):
+        if Path(*parts[:size]).resolve() == root:
+            return Path(*parts[size:]).as_posix()
     raise _GitLookupError(f"dataset manifest {tracked} is outside the git work tree {root}")
 
 
@@ -799,14 +801,18 @@ def cli_error_exit_code(exc: BaseException) -> int:
     """Exit code for an error reported as one ``error:`` line: 1 = run failure, 2 = user error.
 
     ``ValueError``/``OSError`` are user errors (unreadable/invalid config, bad
-    arguments, refused overwrite) except for the subclasses that report a
-    failed run instead: no data fetched, J-Quants API/network errors
-    (``requests`` exceptions subclass ``OSError``), and unreadable Parquet
-    (pyarrow errors subclass ``ValueError``). ``RuntimeError`` is a dataset-state
-    failure (e.g. data that is not Qlib-ready), reported like a failed check.
+    arguments, refused overwrite, rejected credentials: HTTP 401/403) except
+    for the subclasses that report a failed run instead: no data fetched,
+    other J-Quants API/network errors (``requests`` exceptions subclass
+    ``OSError``), and unreadable Parquet (pyarrow errors subclass
+    ``ValueError``). ``RuntimeError`` is a dataset-state failure (e.g. data
+    that is not Qlib-ready), reported like a failed check.
     """
     if isinstance(exc, (RuntimeError, NoDataFetchedError)):
         return 1
+    if isinstance(exc, Exception) and _error_status(exc) in _AUTH_STATUSES:
+        # A wrong or expired key needs a config fix; re-running cannot help.
+        return 2
     # Only consult libraries that are already loaded: an exception of a type
     # from a module that was never imported cannot be this one.
     for module_name, class_name in (("requests", "RequestException"), ("pyarrow", "ArrowException")):

@@ -30,11 +30,11 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
 ### Changed
 
 - **Breaking (CLI exit codes):** J-Quants API / network errors (`requests` exceptions), no data
-  within the `run-daily` lookback, and unreadable Parquet now exit 1 (failed run) instead of 2.
-  Exit 2 is left to configuration and argument errors and the XTKS calendar outage of
-  `run-daily` / `audit`, so a wrapper can treat 2 as "fix the setup" and 1 as "the run failed".
-  The fundamentals CLI follows the same mapping and reports runtime errors as one `error:` line
-  instead of a traceback. `publish-check` now exits 1 where it used to exit 0 when the committed
+  (within the `run-daily` lookback, or no fundamentals), and unreadable Parquet now exit 1 (failed
+  run) instead of 2. Exit 2 is left to configuration and argument errors, rejected credentials
+  (HTTP 401/403), and the XTKS calendar outage of `run-daily` / `audit`, so a wrapper can treat 2
+  as "fix the setup" and 1 as "the run failed". The fundamentals CLI follows the same mapping and
+  reports runtime errors as one `error:` line instead of a traceback. `publish-check` now exits 1 where it used to exit 0 when the committed
   manifest cannot be looked up (see Fixed).
   - Affected: wrappers or monitors that branch on exit code 2 for API outages or "no data", or
     that rely on `publish-check` exit 0 with a missing or unfetched `publish_check.git_ref`.

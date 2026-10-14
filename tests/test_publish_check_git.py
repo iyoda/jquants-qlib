@@ -239,6 +239,24 @@ class PublishCheckGitTests(unittest.TestCase):
         with _chdir(self.repo):
             self.assertEqual(run_publish_check(Path("config.yaml")), 3)
 
+    def test_absolute_path_through_a_symlinked_parent_keeps_the_provider_symlink(self) -> None:
+        # macOS spells temp paths as /var/... while git reports /private/var/...;
+        # mapping that by resolving the whole path also followed the provider
+        # symlink (data/qlib_jp -> builds/...), looked up an uncommitted path and
+        # reported "changed" on every run.
+        alias = Path(self._tmp) / "alias"
+        alias.symlink_to(self.repo, target_is_directory=True)
+        build = self.repo / "data" / "builds" / "b1" / "qlib"
+        build.parent.mkdir(parents=True)
+        (self.repo / "data" / "qlib_jp").rename(build)
+        (self.repo / "data" / "qlib_jp").symlink_to("builds/b1/qlib", target_is_directory=True)
+        (self.repo / "config.yaml").write_text(
+            f'storage:\n  parquet_dir: "./data/parquet"\n  qlib_dir: "{alias / "data" / "qlib_jp"}"\n',
+            encoding="utf-8",
+        )
+        with _chdir(self.repo):
+            self.assertEqual(run_publish_check(Path("config.yaml")), 3)
+
     def test_run_from_subdirectory_is_mapped_to_the_repo_path(self) -> None:
         # The ops checkout lives in a subdirectory with its own cwd-relative
         # storage paths; `./data/...` must map to `ops/data/...` in git.

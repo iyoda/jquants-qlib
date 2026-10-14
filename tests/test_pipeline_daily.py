@@ -320,6 +320,14 @@ class CliExitCodeTests(unittest.TestCase):
             with self.subTest(exc=type(exc).__name__):
                 self.assertEqual(cli_error_exit_code(exc), 2)
 
+    def test_rejected_credentials_exit_2(self) -> None:
+        # 401/403 are not retried and re-running cannot fix a wrong key: a config error.
+        for status in (401, 403):
+            response = requests.Response()
+            response.status_code = status
+            with self.subTest(status=status):
+                self.assertEqual(cli_error_exit_code(requests.HTTPError(str(status), response=response)), 2)
+
     def test_run_failures_exit_1(self) -> None:
         response = requests.Response()
         response.status_code = 503

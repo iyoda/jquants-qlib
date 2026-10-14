@@ -12,7 +12,7 @@ from .fetch import create_jquants_client
 from .fetch_fundamentals import fetch_fundamentals
 from .normalize_fundamentals import PitAuditError, assert_pit_audit_passes, audit_pit, normalize_fundamentals
 from .pipeline import cli_error_exit_code
-from .store import DEFAULT_PARQUET_FILENAME
+from .store import DEFAULT_PARQUET_FILENAME, NoDataFetchedError
 from .store_fundamentals import (
     DEFAULT_RAW_CACHE_FILENAME,
     write_fundamentals_parquet,
@@ -105,7 +105,7 @@ def run_fundamentals_etl(
         max_new_codes=max_new_codes,
     )
     if raw.empty:
-        raise ValueError("No fundamentals data fetched from J-Quants API.")
+        raise NoDataFetchedError("No fundamentals data fetched from J-Quants API.")
 
     calendar = _load_calendar(config)
     panel = normalize_fundamentals(raw, calendar)
