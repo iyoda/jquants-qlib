@@ -89,7 +89,7 @@ security find-generic-password -s jquants-api-key >/dev/null && echo present || 
 | `jquants.refresh_token` | 未使用 | 同上、互換認証用 |
 | `storage.parquet_dir` | 必須（設定例 `./data/parquet`） | 日足 Parquet 保存先 |
 | `storage.qlib_dir` | 必須（設定例 `./data/qlib_jp`） | Qlib データセット出力先 |
-| `publish_check.git_ref` | `origin/main` | `publish-check` が `lineage.parquet_sha256` を比較する git 参照。運用リポジトリの既定ブランチが `master` なら `origin/master` |
+| `publish_check.git_ref` | `origin/main` | `publish-check` が `lineage.parquet_sha256` を比較する git 参照。運用リポジトリの既定ブランチが `master` なら `origin/master`。commit を指さない参照は exit 1 |
 | `qlib.adjustment` | `vendor_factor` | Qlib への出し方。`vendor_factor` はベンダー `AdjFactor` から dump 時に累積して `$factor` と調整済み価格・出来高を出す。`none` は raw の六フィールドだけ（`$factor` なし）。計算は [株価調整](jquants-price-adjustment.md) |
 | `storage.audit_dir` | `./data/audit` | `last_audit.json` 保存先 |
 | `universe.codes` | `[]` | 対象コード。空なら API 取得時の銘柄絞り込みなし |

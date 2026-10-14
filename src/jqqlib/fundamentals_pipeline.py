@@ -11,7 +11,8 @@ from .config import load_config
 from .fetch import create_jquants_client
 from .fetch_fundamentals import fetch_fundamentals
 from .normalize_fundamentals import PitAuditError, assert_pit_audit_passes, audit_pit, normalize_fundamentals
-from .store import DEFAULT_PARQUET_FILENAME
+from .pipeline import cli_error_exit_code
+from .store import DEFAULT_PARQUET_FILENAME, NoDataFetchedError
 from .store_fundamentals import (
     DEFAULT_RAW_CACHE_FILENAME,
     write_fundamentals_parquet,
@@ -104,7 +105,7 @@ def run_fundamentals_etl(
         max_new_codes=max_new_codes,
     )
     if raw.empty:
-        raise ValueError("No fundamentals data fetched from J-Quants API.")
+        raise NoDataFetchedError("No fundamentals data fetched from J-Quants API.")
 
     calendar = _load_calendar(config)
     panel = normalize_fundamentals(raw, calendar)
@@ -148,11 +149,11 @@ def main() -> None:
     except PitAuditError as exc:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(1) from None
-    except (ValueError, OSError) as exc:
+    except (ValueError, OSError, RuntimeError) as exc:
         # Same boundary as jqqlib.pipeline.main: configuration, credential and
-        # missing-input errors are one line on stderr, not a traceback.
+        # missing-input errors exit 2; API, data and runtime failures exit 1.
         print(f"error: {exc}", file=sys.stderr)
-        raise SystemExit(2) from None
+        raise SystemExit(cli_error_exit_code(exc)) from None
 
 
 if __name__ == "__main__":
