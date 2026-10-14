@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 
+import numpy as np
 import pandas as pd
 
 from jqqlib.adjust import apply_vendor_adjustment
@@ -62,6 +63,49 @@ class VendorAdjustmentTests(unittest.TestCase):
         dumped = apply_vendor_adjustment(raw, adjustment=QLIB_ADJUSTMENT_NONE)
         self.assertNotIn("factor", dumped.columns)
         pd.testing.assert_frame_equal(dumped.reset_index(drop=True), raw.reset_index(drop=True))
+
+    def test_vectorised_adjustment_matches_the_per_symbol_reference(self) -> None:
+        # Shuffled multi-symbol input with splits and rights issues: the
+        # vectorised transform must equal the per-symbol loop it replaced, row
+        # order included (symbols in first-appearance order, dates ascending).
+        rng = np.random.default_rng(7)
+        dates = pd.bdate_range("2026-01-05", periods=40).strftime("%Y-%m-%d")
+        frames = []
+        for code in ("10030", "10010", "10020"):
+            factors = rng.choice([1.0, 1.0, 1.0, 1.0, 0.5, 2.0, 0.8], size=len(dates))
+            frames.append(pd.DataFrame({
+                "symbol": code, "date": dates,
+                "open": rng.uniform(90, 110, len(dates)), "high": rng.uniform(110, 120, len(dates)),
+                "low": rng.uniform(80, 90, len(dates)), "close": rng.uniform(90, 110, len(dates)),
+                "volume": rng.integers(100, 10_000, len(dates)).astype(float),
+                "amount": rng.uniform(1e6, 1e7, len(dates)),
+                "adjustment_factor": factors,
+                "ex_rights_type": rng.choice(["0", "1", "3"], size=len(dates)),
+            }))
+        raw = pd.concat(frames, ignore_index=True).sample(frac=1.0, random_state=3)
+
+        pd.testing.assert_frame_equal(apply_vendor_adjustment(raw), _reference_vendor_adjustment(raw))
+
+
+def _reference_vendor_adjustment(df: pd.DataFrame) -> pd.DataFrame:
+    """The per-symbol implementation the vectorised one replaced (0.1.0)."""
+
+    def exclusive_reverse_cumprod(values: pd.Series) -> pd.Series:
+        return values.iloc[::-1].cumprod().shift(1, fill_value=1.0).iloc[::-1]
+
+    pieces = []
+    for _, group in df.groupby("symbol", sort=False):
+        group = group.sort_values("date")
+        price_cum = exclusive_reverse_cumprod(group["adjustment_factor"])
+        rights = group["ex_rights_type"].astype(str).str.strip().isin(["3", "3.0"])
+        volume_cum = exclusive_reverse_cumprod(group["adjustment_factor"].where(~rights, 1.0))
+        adjusted = group.copy()
+        for field in ("open", "high", "low", "close"):
+            adjusted[field] = adjusted[field] * price_cum
+        adjusted["volume"] = adjusted["volume"] / volume_cum
+        adjusted["factor"] = price_cum
+        pieces.append(adjusted)
+    return pd.concat(pieces, ignore_index=True)
 
 
 if __name__ == "__main__":

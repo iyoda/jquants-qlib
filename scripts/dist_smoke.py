@@ -74,7 +74,7 @@ def smoke_dates() -> list[str]:
 def write_inline_csv(path: Path) -> Path:
     # Same column contract and shape as tests.support.synthetic, with fixed prices.
     with path.open("w", encoding="utf-8", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=BOOTSTRAP_CSV_COLUMNS, lineterminator="\n")
+        writer = csv.DictWriter(stream, fieldnames=[*BOOTSTRAP_CSV_COLUMNS, "AdjustmentFactor"], lineterminator="\n")
         writer.writeheader()
         for index, code in enumerate(SMOKE_SYMBOLS):
             for offset, day in enumerate(smoke_dates()):
@@ -84,7 +84,7 @@ def write_inline_csv(path: Path) -> Path:
                 writer.writerow({
                     "Code": code, "Date": day, "Open": opening, "High": closing + 5,
                     "Low": opening - 5, "Close": closing, "Volume": volume,
-                    "TurnoverValue": closing * volume,
+                    "TurnoverValue": closing * volume, "AdjustmentFactor": 1.0,
                 })
     return path
 

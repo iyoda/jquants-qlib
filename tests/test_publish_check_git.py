@@ -301,6 +301,25 @@ class PublishCheckGitTests(unittest.TestCase):
         self.assertEqual(decision.returncode, 1)
         self.assertIn("git is not available", decision.reason)
 
+    def test_adjustment_policy_change_with_identical_parquet_requires_publish(self) -> None:
+        # Switching qlib.adjustment re-dumps the same Parquet into a different Qlib
+        # dataset; comparing parquet_sha256 alone reported "unchanged".
+        manifest_path = self.repo / "data" / "qlib_jp" / "dataset_manifest.json"
+
+        def set_policy(price_adjustment: str) -> None:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["adjustment_policy"] = {"price_adjustment": price_adjustment}
+            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+        set_policy("vendor_cumulative_factor")
+        _git(self.repo, "add", "-A")
+        _git(self.repo, "commit", "-m", "vendor_factor dataset")
+        _git(self.repo, "push")
+        with _chdir(self.repo):
+            self.assertEqual(run_publish_check(Path("config.yaml")), 3)
+            set_policy("none")
+            self.assertEqual(run_publish_check(Path("config.yaml")), 0)
+
     def test_quality_report_fail_blocks_publish(self) -> None:
         _write_manifest(
             self.repo,

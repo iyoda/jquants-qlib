@@ -10,7 +10,7 @@ import pandas as pd
 import yaml
 
 from jqqlib.manifest import _sha256_file
-from jqqlib.pipeline import read_existing_dataset_end, run_daily
+from jqqlib.pipeline import read_existing_dataset_end, run_bootstrap_csv, run_daily
 from jqqlib.store import DEFAULT_PARQUET_FILENAME, write_parquet
 
 
@@ -59,6 +59,60 @@ class WriteParquetReadinessTests(unittest.TestCase):
             out = write_parquet(pd.DataFrame([_row("10010", "2026-06-04")]), parquet_dir, merge_mode="upsert")
 
             self.assertEqual(pd.read_parquet(out)["adjustment_factor"].tolist(), [1.0])
+
+
+class AdjustmentFactorSourceTests(unittest.TestCase):
+    def test_vendor_factor_refuses_a_source_without_the_factor_column(self) -> None:
+        rows = [{key: value for key, value in _row("10010", "2026-06-04").items() if key != "AdjFactor"}]
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaisesRegex(RuntimeError, "no AdjFactor/AdjustmentFactor column"):
+                write_parquet(pd.DataFrame(rows), Path(tmp), require_adjustment_factor=True)
+            self.assertEqual(list(Path(tmp).iterdir()), [])
+
+    def test_missing_factor_column_is_filled_with_a_warning_when_not_required(self) -> None:
+        rows = [{key: value for key, value in _row("10010", "2026-06-04").items() if key != "AdjFactor"}]
+        with tempfile.TemporaryDirectory() as tmp, self.assertLogs("jqqlib.normalize", "WARNING") as logged:
+            out = write_parquet(pd.DataFrame(rows), Path(tmp))
+
+            self.assertEqual(pd.read_parquet(out)["adjustment_factor"].tolist(), [1.0])
+        self.assertIn("no AdjFactor/AdjustmentFactor column", logged.output[0])
+
+    def test_null_vendor_factors_are_counted_in_a_warning(self) -> None:
+        rows = [_row("10010", "2026-06-04", adj_factor=float("nan")), _row("10010", "2026-06-05")]
+        with tempfile.TemporaryDirectory() as tmp, self.assertLogs("jqqlib.normalize", "WARNING") as logged:
+            out = write_parquet(pd.DataFrame(rows), Path(tmp), require_adjustment_factor=True)
+
+            self.assertEqual(pd.read_parquet(out)["adjustment_factor"].tolist(), [1.0, 1.0])
+        self.assertEqual(
+            logged.output, ["WARNING:jqqlib.normalize:Filled 1 null or non-numeric AdjFactor values with 1.0."]
+        )
+
+    def test_bootstrap_requires_the_factor_column_only_for_vendor_factor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            csv_path = root / "daily_quotes.csv"
+            pd.DataFrame([{
+                "Code": "10010", "Date": "2026-06-04", "Open": 1.0, "High": 2.0, "Low": 0.5, "Close": 1.5,
+                "Volume": 100, "TurnoverValue": 150.0,
+            }]).to_csv(csv_path, index=False)
+            for adjustment, refused in (("vendor_factor", True), ("none", False)):
+                with self.subTest(adjustment=adjustment):
+                    config_path = root / f"{adjustment}.yaml"
+                    config_path.write_text(yaml.safe_dump({
+                        "storage": {
+                            "parquet_dir": str(root / adjustment / "parquet"),
+                            "qlib_dir": str(root / adjustment / "qlib"),
+                        },
+                        "qlib": {"adjustment": adjustment},
+                    }), encoding="utf-8")
+                    if refused:
+                        with self.assertRaisesRegex(RuntimeError, "no AdjFactor/AdjustmentFactor column"):
+                            run_bootstrap_csv(config_path, csv_path)
+                        self.assertFalse((root / adjustment / "parquet" / DEFAULT_PARQUET_FILENAME).exists())
+                    else:
+                        with self.assertLogs("jqqlib.normalize", "WARNING"):
+                            run_bootstrap_csv(config_path, csv_path)
+                        self.assertTrue((root / adjustment / "qlib" / "calendars" / "day.txt").exists())
 
 
 class RunDailyInvalidFetchTests(unittest.TestCase):

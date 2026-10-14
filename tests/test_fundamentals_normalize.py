@@ -104,6 +104,32 @@ class NormalizeFundamentalsTests(unittest.TestCase):
         # the second (later DiscDate) must be the one that survives.
         self.assertEqual(by_code.loc["2026-06-03", "Eq"], 20.0)
 
+    def test_same_day_disclosures_merge_field_by_field_in_any_input_order(self) -> None:
+        # Results (NP) and a forecast revision (FNP) disclosed on the same day:
+        # each must keep the field it carries, whichever row comes first.
+        prior = {"Code": "10010", "DiscDate": "2026-06-01", "DiscTime": "15:00:00", "NP": 50.0, "FNP": 180.0}
+        results = {"Code": "10010", "DiscDate": "2026-06-03", "DiscTime": "15:00:00", "NP": 100.0, "FNP": None}
+        revision = {"Code": "10010", "DiscDate": "2026-06-03", "DiscTime": "15:30:00", "NP": None, "FNP": 200.0}
+        for rows in ([prior, results, revision], [revision, results, prior]):
+            with self.subTest(order=[row["DiscTime"] + str(row["NP"]) for row in rows]):
+                panel = normalize_fundamentals(pd.DataFrame(rows), _calendar())
+                by_code = panel.xs("10010", level="instrument")
+
+                self.assertEqual(by_code.loc["2026-06-04", "NP"], 100.0)
+                self.assertEqual(by_code.loc["2026-06-04", "FNP"], 200.0)
+                self.assertEqual(by_code.loc["2026-06-03", "NP"], 50.0)
+
+    def test_same_day_disclosures_resolve_conflicts_by_disc_time_then_disc_no(self) -> None:
+        early = {"Code": "10010", "DiscDate": "2026-06-03", "DiscTime": "13:00:00", "DiscNo": "900", "Eq": 1.0}
+        late = {"Code": "10010", "DiscDate": "2026-06-03", "DiscTime": "15:00:00", "DiscNo": "100", "Eq": 2.0}
+        first_no = {"Code": "10020", "DiscDate": "2026-06-03", "DiscTime": "15:00:00", "DiscNo": "9", "Eq": 3.0}
+        second_no = {"Code": "10020", "DiscDate": "2026-06-03", "DiscTime": "15:00:00", "DiscNo": "10", "Eq": 4.0}
+
+        panel = normalize_fundamentals(pd.DataFrame([late, early, second_no, first_no]), _calendar())
+
+        self.assertEqual(panel.loc[("2026-06-04", "10010"), "Eq"], 2.0)
+        self.assertEqual(panel.loc[("2026-06-04", "10020"), "Eq"], 4.0)  # DiscNo 10 > 9 numerically
+
     def test_clean_panel_has_zero_pit_violations_and_passes_gate(self) -> None:
         raw = pd.DataFrame(
             [

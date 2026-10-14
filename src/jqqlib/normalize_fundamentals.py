@@ -25,9 +25,14 @@ def normalize_fundamentals(raw: pd.DataFrame, calendar: pd.DatetimeIndex) -> pd.
 
     PIT rule (conservative, look-ahead-free): a disclosure dated ``DiscDate`` D
     becomes effective on the first trading day STRICTLY AFTER D (``DiscTime`` is
-    ignored -- the conservative choice), then is forward-filled per code until
-    the next disclosure supersedes it. Rows before a code's first disclosure are
-    dropped (no fundamental is known as-of yet).
+    ignored for this -- the conservative choice), then is forward-filled per
+    code until the next disclosure supersedes it. Rows before a code's first
+    disclosure are dropped (no fundamental is known as-of yet).
+
+    Disclosures of one code that take effect on the same day (e.g. results and
+    a forecast revision on one ``DiscDate``) are merged field by field in
+    ``DiscDate`` / ``DiscTime`` / ``DiscNo`` order: the latest non-null value
+    of each field wins, as the forward fill does across days.
 
     Returns a frame indexed by a 2-level ``["datetime", "instrument"]``
     MultiIndex (StaticDataLoader-ready), with a ``_src_DiscDate`` provenance
@@ -60,11 +65,22 @@ def normalize_fundamentals(raw: pd.DataFrame, calendar: pd.DatetimeIndex) -> pd.
     present_num = [c for c in CARRY_NUM if c in working.columns]
     present_str = [c for c in CARRY_STR if c in working.columns]
     keep = ["Code", "eff_date", "DiscDate"] + present_num + present_str
-    # If two disclosures land on the same eff_date for a code, keep the latest DiscDate.
+    # Disclosure order within a day: DiscTime, then DiscNo (numeric); a stable
+    # sort keeps the input order only for disclosures that tie on all of them.
+    order = ["Code", "DiscDate"]
+    if "DiscTime" in working.columns:
+        working["_disc_time"] = working["DiscTime"].astype("string")
+        order.append("_disc_time")
+    if "DiscNo" in working.columns:
+        working["_disc_no"] = pd.to_numeric(working["DiscNo"], errors="coerce")
+        order.append("_disc_no")
+    # Same-day disclosures merge field by field (GroupBy.last skips nulls), so
+    # a forecast revision does not drop the results published alongside it.
     ev = (
-        working[keep]
-        .sort_values(["Code", "DiscDate"])
-        .drop_duplicates(["Code", "eff_date"], keep="last")
+        working.sort_values(order, kind="mergesort")[keep]
+        .groupby(["Code", "eff_date"], sort=False)
+        .last()
+        .reset_index()
     )
 
     frames = []

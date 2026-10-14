@@ -34,7 +34,13 @@ def _write_parquet_atomic(frame: pd.DataFrame, output_path: Path) -> None:
         raise
 
 
-def write_parquet(df: pd.DataFrame, parquet_dir: Path, merge_mode: str = "replace") -> Path:
+def write_parquet(
+    df: pd.DataFrame,
+    parquet_dir: Path,
+    merge_mode: str = "replace",
+    *,
+    require_adjustment_factor: bool = False,
+) -> Path:
     import pandas as pd
 
     parquet_dir.mkdir(parents=True, exist_ok=True)
@@ -42,7 +48,9 @@ def write_parquet(df: pd.DataFrame, parquet_dir: Path, merge_mode: str = "replac
     if df.empty:
         raise NoDataFetchedError("No data fetched from J-Quants API.")
 
-    normalized = normalize_for_qlib(normalize_daily_quote_columns(df))
+    normalized = normalize_for_qlib(
+        normalize_daily_quote_columns(df), require_adjustment_factor=require_adjustment_factor
+    )
     output_path = parquet_dir / DEFAULT_PARQUET_FILENAME
 
     if merge_mode not in {"replace", "upsert"}:
@@ -78,7 +86,7 @@ def write_parquet(df: pd.DataFrame, parquet_dir: Path, merge_mode: str = "replac
     return output_path
 
 
-def csv_to_parquet(csv_path: Path, parquet_dir: Path) -> Path:
+def csv_to_parquet(csv_path: Path, parquet_dir: Path, *, require_adjustment_factor: bool = False) -> Path:
     """Bootstrap helper for initial bulk load from a downloaded CSV file."""
     import pandas as pd
 
@@ -89,7 +97,7 @@ def csv_to_parquet(csv_path: Path, parquet_dir: Path) -> Path:
     if df.empty:
         raise ValueError(f"CSV file is empty: {csv_path}")
 
-    return write_parquet(df, parquet_dir)
+    return write_parquet(df, parquet_dir, require_adjustment_factor=require_adjustment_factor)
 
 
 def write_bootstrap_csv(df: pd.DataFrame, output_path: Path) -> Path:

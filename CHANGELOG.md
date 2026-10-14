@@ -26,16 +26,47 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
   interrupt deleted them.
 - The Qlib dump stages its build next to the resolved `storage.qlib_dir`, so a `qlib_dir` that is
   a symlink to another filesystem no longer fails with `Invalid cross-device link`.
+- Fundamentals disclosures of one code that take effect on the same day (e.g. results and a
+  forecast revision on one `DiscDate`) are merged field by field in `DiscDate` / `DiscTime` /
+  `DiscNo` order, latest non-null value first. Previously one whole row was kept, chosen by input
+  order, so the new `NP` or the new `FNP` stayed stale until the next disclosure. Re-run
+  `run-fundamentals-etl` to rebuild the panel.
+- With `qlib.adjustment: vendor_factor`, the quality report fails (`dumped_factor`) when the
+  factor cannot be computed (no `adjustment_factor` column, or null factors) instead of skipping
+  the check and reporting `pass`.
+- `publish-check` also compares the manifests' `adjustment_policy`, so switching
+  `qlib.adjustment` (same Parquet, different Qlib dataset) is a change, not "unchanged".
+- `dataset_id` includes the adjustment mode, so the same Parquet dumped in both modes gets two
+  ids. Existing ids change once on the next build.
+- Building the manifest and quality report reads the Parquet and runs the quality inspection once
+  instead of twice, and the vendor-factor transform is vectorised (about 8x faster on 1M rows,
+  identical output).
 
 ### Changed
+
+- **Breaking (missing vendor factor):** with `qlib.adjustment: vendor_factor` (the default),
+  `run-etl` / `run-all` / `run-daily` / `bootstrap-csv` refuse source data that has no `AdjFactor`
+  / `AdjustmentFactor` column (`error: Source data has no AdjFactor/AdjustmentFactor column...`,
+  exit 1, Parquet unchanged). Previously every row silently got factor 1.0, so splits were
+  dumped unadjusted. Null or non-numeric factors on individual rows still become 1.0, now with a
+  `Filled N null or non-numeric AdjFactor values with 1.0.` warning on stderr; with
+  `qlib.adjustment: none` a source without the column still gets 1.0, with a warning.
+  - Affected: `bootstrap-csv` from a CSV without a factor column (e.g. a hand-made or third-party
+    CSV) in the default mode. J-Quants API responses and `download-csv` CSVs carry the column.
+  - Required changes: re-download the CSV with `download-csv`, add the vendor factor column, or
+    set `qlib.adjustment: none` for raw prices.
+  - Data: existing Parquet is unchanged; it may already hold 1.0 factors from such a source, so
+    rebuild it from a source with factors if split adjustment matters.
+  - Validate / roll back: `jqqlib bootstrap-csv` then `jqqlib validate` exit 0; rolling back to
+    the previous release restores the silent 1.0 fill.
 
 - **Breaking (CLI exit codes):** J-Quants API / network errors (`requests` exceptions), no data
   (within the `run-daily` lookback, or no fundamentals), and unreadable Parquet now exit 1 (failed
   run) instead of 2. Exit 2 is left to configuration and argument errors, rejected credentials
   (HTTP 401/403), and the XTKS calendar outage of `run-daily` / `audit`, so a wrapper can treat 2
   as "fix the setup" and 1 as "the run failed". The fundamentals CLI follows the same mapping and
-  reports runtime errors as one `error:` line instead of a traceback. `publish-check` now exits 1 where it used to exit 0 when the committed
-  manifest cannot be looked up (see Fixed).
+  reports runtime errors as one `error:` line instead of a traceback. `publish-check` now exits 1
+  where it used to exit 0 when the committed manifest cannot be looked up (see Fixed).
   - Affected: wrappers or monitors that branch on exit code 2 for API outages or "no data", or
     that rely on `publish-check` exit 0 with a missing or unfetched `publish_check.git_ref`.
   - Required changes: alert on exit 1 for those cases; make sure `publish_check.git_ref` exists
