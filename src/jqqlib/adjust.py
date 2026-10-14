@@ -57,21 +57,24 @@ def apply_vendor_adjustment(
     out["adjustment_factor"] = numeric
     # Vectorised over all symbols (a per-symbol Python loop dominated large
     # builds). Rows come out grouped by symbol in first-appearance order, each
-    # symbol sorted by date; rows without a symbol are dropped, as groupby does.
-    out = out[out["symbol"].notna()].reset_index(drop=True)
-    if out.empty:
+    # symbol sorted by date; rows without a symbol are dropped, as groupby does
+    # (with no symbol at all, the rows are returned unchanged with factor 1.0).
+    keyed = out[out["symbol"].notna()]
+    if keyed.empty:
         out["factor"] = 1.0
         return out
+    out = keyed.reset_index(drop=True)
     symbol_order = pd.Series(pd.factorize(out["symbol"])[0], index=out.index)
     ordered = out.iloc[
         pd.DataFrame({"order": symbol_order, "date": out["date"]})
         .sort_values(["order", "date"], kind="mergesort")
         .index
     ].reset_index(drop=True)
-    price_cum = _exclusive_reverse_cumprod(ordered["adjustment_factor"], ordered["symbol"])
-    volume_cum = _exclusive_reverse_cumprod(
-        _volume_factors(ordered, ordered["adjustment_factor"]), ordered["symbol"]
-    )
+    # float64 for the products: a nullable integer (Int64) factor, e.g. read back
+    # from Parquet, cannot take the grouped shift's 1.0 fill value.
+    factors = ordered["adjustment_factor"].astype("float64")
+    price_cum = _exclusive_reverse_cumprod(factors, ordered["symbol"])
+    volume_cum = _exclusive_reverse_cumprod(_volume_factors(ordered, factors), ordered["symbol"])
     for field in PRICE_FIELDS:
         ordered[field] = ordered[field] * price_cum
     ordered["volume"] = ordered["volume"] / volume_cum

@@ -64,6 +64,27 @@ class VendorAdjustmentTests(unittest.TestCase):
         self.assertNotIn("factor", dumped.columns)
         pd.testing.assert_frame_equal(dumped.reset_index(drop=True), raw.reset_index(drop=True))
 
+    def test_nullable_integer_factor_is_adjusted_like_float(self) -> None:
+        raw = _series()
+        as_int = raw.assign(adjustment_factor=pd.array([1, 2, 1, 1, 1], dtype="Int64"))
+        as_float = raw.assign(adjustment_factor=[1.0, 2.0, 1.0, 1.0, 1.0])
+
+        dumped = apply_vendor_adjustment(as_int)
+
+        self.assertEqual(list(dumped["factor"]), [2.0, 1.0, 1.0, 1.0, 1.0])
+        pd.testing.assert_frame_equal(
+            dumped.drop(columns=["adjustment_factor"]),
+            apply_vendor_adjustment(as_float).drop(columns=["adjustment_factor"]),
+        )
+
+    def test_rows_without_any_symbol_are_returned_with_factor_one(self) -> None:
+        raw = _series().assign(symbol=None)
+
+        dumped = apply_vendor_adjustment(raw)
+
+        self.assertEqual(len(dumped), len(raw))
+        self.assertEqual(list(dumped["factor"]), [1.0] * len(raw))
+
     def test_vectorised_adjustment_matches_the_per_symbol_reference(self) -> None:
         # Shuffled multi-symbol input with splits and rights issues: the
         # vectorised transform must equal the per-symbol loop it replaced, row

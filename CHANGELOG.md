@@ -40,7 +40,7 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
   ids. Existing ids change once on the next build.
 - Building the manifest and quality report reads the Parquet and runs the quality inspection once
   instead of twice, and the vendor-factor transform is vectorised (about 8x faster on 1M rows,
-  identical output).
+  same values and row order; a nullable integer factor is computed in float64).
 
 ### Changed
 

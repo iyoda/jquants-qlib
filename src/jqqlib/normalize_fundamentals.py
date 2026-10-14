@@ -55,6 +55,12 @@ def normalize_fundamentals(raw: pd.DataFrame, calendar: pd.DatetimeIndex) -> pd.
     for col in CARRY_NUM:
         if col in working.columns:
             working[col] = pd.to_numeric(working[col], errors="coerce")
+    # A blank string carries no value: make it null so it neither overrides a
+    # same-day disclosure nor the forward-filled one.
+    for col in CARRY_STR:
+        if col in working.columns:
+            blank = (working[col].astype("string").str.strip() == "").fillna(False)
+            working[col] = working[col].mask(blank)
 
     # effective date = first trading day STRICTLY AFTER DiscDate (no same-day use)
     pos = np.searchsorted(cal_arr, working["DiscDate"].to_numpy(), side="right")
@@ -65,19 +71,25 @@ def normalize_fundamentals(raw: pd.DataFrame, calendar: pd.DatetimeIndex) -> pd.
     present_num = [c for c in CARRY_NUM if c in working.columns]
     present_str = [c for c in CARRY_STR if c in working.columns]
     keep = ["Code", "eff_date", "DiscDate"] + present_num + present_str
-    # Disclosure order within a day: DiscTime, then DiscNo (numeric); a stable
-    # sort keeps the input order only for disclosures that tie on all of them.
+    # Disclosure order within a day: DiscTime, then DiscNo (as an integer,
+    # compared exactly by digit count then digits); a stable sort keeps the
+    # input order only for disclosures that tie on all of them. A missing or
+    # unusable key sorts first, so it never outranks a properly keyed row.
     order = ["Code", "DiscDate"]
     if "DiscTime" in working.columns:
-        working["_disc_time"] = working["DiscTime"].astype("string")
+        disc_time = working["DiscTime"].astype("string").str.strip()
+        working["_disc_time"] = disc_time.mask(disc_time == "")
         order.append("_disc_time")
     if "DiscNo" in working.columns:
-        working["_disc_no"] = pd.to_numeric(working["DiscNo"], errors="coerce")
-        order.append("_disc_no")
+        disc_no = working["DiscNo"].astype("string").str.strip()
+        digits = disc_no.where(disc_no.str.fullmatch(r"\d+").fillna(False)).str.lstrip("0").replace("", "0")
+        working["_disc_no_len"] = digits.str.len()
+        working["_disc_no"] = digits
+        order += ["_disc_no_len", "_disc_no"]
     # Same-day disclosures merge field by field (GroupBy.last skips nulls), so
     # a forecast revision does not drop the results published alongside it.
     ev = (
-        working.sort_values(order, kind="mergesort")[keep]
+        working.sort_values(order, kind="mergesort", na_position="first")[keep]
         .groupby(["Code", "eff_date"], sort=False)
         .last()
         .reset_index()

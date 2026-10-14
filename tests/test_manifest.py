@@ -12,6 +12,7 @@ import pandas as pd
 from jqqlib.config import QLIB_ADJUSTMENT_NONE
 from jqqlib.contracts import load_schema
 from jqqlib.manifest import (
+    _build_quality_inspection,
     _producer_git_commit,
     build_dataset_manifest,
     build_dataset_quality_report,
@@ -347,6 +348,20 @@ class DatasetManifestTests(unittest.TestCase):
                 )
                 self.assertEqual(none_report["status"], "pass")
 
+    def test_quality_report_accepts_a_nullable_integer_factor_read_back_from_parquet(self) -> None:
+        # Parquet round trip of an Int64 adjustment_factor: the vectorised factor
+        # transform must not crash the report (it only catches ValueError).
+        with tempfile.TemporaryDirectory() as tmpdir:
+            parquet_path, qlib_dir = self._seed_vendor_dataset(
+                Path(tmpdir), adjustment_factor=pd.array([1, 1], dtype="Int64")
+            )
+            self.assertEqual(str(pd.read_parquet(parquet_path)["adjustment_factor"].dtype), "Int64")
+
+            report = build_dataset_quality_report(parquet_path=parquet_path, qlib_dir=qlib_dir)
+
+        self.assertEqual(report["status"], "pass")
+        self.assertEqual(report["checks"]["dumped_factor_invalid_rows"], 0)
+
     def test_dataset_id_depends_on_the_adjustment_mode(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             parquet_path, qlib_dir = self._seed_vendor_dataset(Path(tmpdir), adjustment_factor=[1.0, 1.0])
@@ -360,16 +375,12 @@ class DatasetManifestTests(unittest.TestCase):
         self.assertNotEqual(ids["vendor_factor"], ids[QLIB_ADJUSTMENT_NONE])
 
     def test_write_dataset_artifacts_inspects_the_dataset_once(self) -> None:
-        import jqqlib.manifest as manifest_module
-
         with tempfile.TemporaryDirectory() as tmpdir:
             parquet_path, qlib_dir = self._seed_vendor_dataset(Path(tmpdir), adjustment_factor=[1.0, 1.0])
             with patch(
-                "jqqlib.manifest._build_quality_inspection", wraps=manifest_module._build_quality_inspection
+                "jqqlib.manifest._build_quality_inspection", wraps=_build_quality_inspection
             ) as inspection:
-                manifest_path, quality_path = write_dataset_artifacts(
-                    parquet_path=parquet_path, qlib_dir=qlib_dir, source={"kind": "test"}
-                )
+                write_dataset_artifacts(parquet_path=parquet_path, qlib_dir=qlib_dir, source={"kind": "test"})
 
             self.assertEqual(inspection.call_count, 1)
             manifest = read_dataset_manifest(qlib_dir)
