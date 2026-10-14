@@ -421,16 +421,22 @@ def _build_quality_inspection(
 
     dumped_factor_invalid_rows = None
     dumped_factor_latest_not_one_symbols = None
-    if (
-        adjustment == QLIB_ADJUSTMENT_VENDOR_FACTOR
-        and not df.empty
-        and set(QLIB_FIELDS).issubset(df.columns)
-        and "adjustment_factor" in df.columns
-    ):
+    if adjustment == QLIB_ADJUSTMENT_VENDOR_FACTOR and not df.empty and set(QLIB_FIELDS).issubset(df.columns):
+        # vendor_factor promises a $factor series: a Parquet the factor cannot be
+        # computed from is a failed dataset, not one that skips the check.
+        dumped = None
         try:
             dumped = apply_vendor_adjustment(df)
-        except ValueError:
-            dumped = None
+        except ValueError as exc:
+            findings.append(
+                _quality_finding(
+                    check="dumped_factor",
+                    severity="fail",
+                    count=int(len(df)),
+                    detail=f"Dumped factor cannot be computed: {exc}",
+                    field="factor",
+                )
+            )
         if dumped is not None and "factor" in dumped.columns:
             factor = dumped["factor"]
             numeric_factor = pd.to_numeric(factor, errors="coerce")
@@ -629,16 +635,36 @@ def build_dataset_manifest(
     source: dict[str, Any],
     adjustment: str = DEFAULT_QLIB_ADJUSTMENT,
 ) -> dict[str, Any]:
+    df = _read_dataset_parquet(parquet_path)
+    quality = _build_quality_inspection(df, qlib_dir, adjustment=adjustment)
+    return _dataset_manifest_payload(
+        df, quality, parquet_path=parquet_path, qlib_dir=qlib_dir, source=source, adjustment=adjustment
+    )
+
+
+def _read_dataset_parquet(parquet_path: Path) -> Any:
     import pandas as pd
 
     df = pd.read_parquet(parquet_path)
     if df.empty:
         raise ValueError(f"Parquet file is empty: {parquet_path}")
+    return df
+
+
+def _dataset_manifest_payload(
+    df: Any,
+    quality: dict[str, Any],
+    *,
+    parquet_path: Path,
+    qlib_dir: Path,
+    source: dict[str, Any],
+    adjustment: str,
+) -> dict[str, Any]:
+    import pandas as pd
 
     parsed_dates = pd.to_datetime(df["date"])
     calendar_stats = _read_calendar_stats(qlib_dir)
     parquet_sha256 = _sha256_file(parquet_path)
-    quality = _build_quality_inspection(df, qlib_dir, adjustment=adjustment)
     dataset_identity = {
         "schema_version": DATASET_MANIFEST_SCHEMA_VERSION,
         "date_start": _date_or_none(parsed_dates.min()),
@@ -646,6 +672,8 @@ def build_dataset_manifest(
         "rows": int(len(df)),
         "instruments": int(df["symbol"].nunique()),
         "parquet_sha256": parquet_sha256,
+        # The same Parquet dumped with another qlib.adjustment is another dataset.
+        "adjustment": adjustment,
         "source": source,
     }
     dataset_id = "jqqlib-v2-" + _sha256_json(dataset_identity)[:16]
@@ -697,7 +725,16 @@ def build_dataset_quality_report(
 
     df = pd.read_parquet(parquet_path)
     quality = _build_quality_inspection(df, qlib_dir, adjustment=adjustment)
+    return _quality_report_payload(quality, parquet_path=parquet_path, qlib_dir=qlib_dir, manifest=manifest)
 
+
+def _quality_report_payload(
+    quality: dict[str, Any],
+    *,
+    parquet_path: Path,
+    qlib_dir: Path,
+    manifest: dict[str, Any] | None,
+) -> dict[str, Any]:
     return {
         "schema_version": DATASET_QUALITY_REPORT_SCHEMA_VERSION,
         "generated_at": _utc_now(),
@@ -747,12 +784,17 @@ def write_dataset_artifacts(
     source: dict[str, Any],
     adjustment: str = DEFAULT_QLIB_ADJUSTMENT,
 ) -> tuple[Path, Path]:
-    manifest = build_dataset_manifest(
-        parquet_path=parquet_path, qlib_dir=qlib_dir, source=source, adjustment=adjustment
+    # One read and one quality inspection serve both artifacts: the inspection
+    # runs the vendor-factor transform over the whole dataset.
+    df = _read_dataset_parquet(parquet_path)
+    quality = _build_quality_inspection(df, qlib_dir, adjustment=adjustment)
+    manifest = _dataset_manifest_payload(
+        df, quality, parquet_path=parquet_path, qlib_dir=qlib_dir, source=source, adjustment=adjustment
     )
     manifest_path = write_json_atomic(dataset_manifest_path(qlib_dir), manifest)
-    quality_path = write_dataset_quality_report(
-        parquet_path=parquet_path, qlib_dir=qlib_dir, manifest=manifest, adjustment=adjustment
+    quality_path = write_json_atomic(
+        dataset_quality_report_path(qlib_dir),
+        _quality_report_payload(quality, parquet_path=parquet_path, qlib_dir=qlib_dir, manifest=manifest),
     )
     # Bind the quality decision into the manifest after the report is final.
     manifest["lineage"]["quality_report_sha256"] = _sha256_file(quality_path)

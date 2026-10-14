@@ -80,7 +80,7 @@ CSV は架空のデータです。
 
 ```bash
 python -m tests.support.synthetic --out /tmp/sample
-# 分割イベントを含める例（架空コード。繰り返し可。省略時は AdjustmentFactor 列なし）
+# 分割イベントを含める例（架空コード。繰り返し可。省略時は AdjustmentFactor がすべて 1.0）
 # python -m tests.support.synthetic --out /tmp/sample --split 10010:2026-06-03:0.5
 cat > /tmp/sample/config.yaml <<'YAML'
 storage:

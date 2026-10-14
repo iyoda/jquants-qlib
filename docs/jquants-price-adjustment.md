@@ -29,7 +29,7 @@ bulk CSV では `AdjustmentFactor` / `AdjustmentOpen` などの長い列名が�
 
 ## 本パッケージでの扱い
 
-- **Parquet は raw。** 必須列 `adjustment_factor`（`AdjFactor` / `AdjustmentFactor` を float に写す。欠落や null は `1.0`）と、ソースに `ExRT` があるときだけの任意列 `ex_rights_type` を足します。累積係数は保存しません。列順は `symbol, date, open, high, low, close, volume, amount, adjustment_factor[, ex_rights_type]`。
+- **Parquet は raw。** 必須列 `adjustment_factor`（`AdjFactor` / `AdjustmentFactor` を float に写す。行単位の null や数値でない値は `1.0` にし、件数を警告。列そのものが無いソースは `vendor_factor` では `error:` と exit 1 で拒否し、`none` では警告付きで `1.0`）と、ソースに `ExRT` があるときだけの任意列 `ex_rights_type` を足します。累積係数は保存しません。列順は `symbol, date, open, high, low, close, volume, amount, adjustment_factor[, ex_rights_type]`。
 - **Qlib は dump 時に累積します**（既定 `qlib.adjustment: vendor_factor`）。銘柄ごとに日付昇順で、`price_cum[i] = prod(adjustment_factor[j] for j > i)`（最新行は `1.0`）。`volume_cum` も同じ積ですが、`ex_rights_type == "3"`（ライツイシュー）の行は係数 `1` として扱います。出すフィールドは `open/high/low/close` × `price_cum`、`volume` ÷ `volume_cum`、`amount` はそのまま、`factor` = `price_cum`。丸めはしません。
 - **Qlib の慣習。** `raw_price = $close / $factor`、最新日は `$factor = 1.0` で保存価格は raw と一致します。配当は調整しません。
 - **raw の Qlib が欲しいとき**は `qlib.adjustment: none` です。六フィールドだけで `$factor` ファイルは出しません。

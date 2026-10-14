@@ -165,7 +165,8 @@ contract だけで、`data/`（Parquet・Qlib feature bin・calendars・instrume
 比較して内容が変わったときだけ commit すべきかを判定します（変更なしは exit 3）。manifest のパスは
 git の作業ツリーのルート基準に変換して引くため、`storage.qlib_dir` が絶対パスでもサブディレクトリから
 実行しても同じ結果になります。`git_ref` 上にその manifest が無ければ初回 publish（exit 0）ですが、
-`git_ref` 自体を引けない場合は exit 1 です。その運用リポジトリの
+`git_ref` 自体を引けない場合は exit 1 です。`parquet_sha256` が同じでも、manifest の
+`adjustment_policy` が異なる（`qlib.adjustment` を切り替えた）場合は変更ありとします。その運用リポジトリの
 `.gitignore` は次のように、この 2 つの JSON だけを残してデータ本体を除外してください。
 
 ```gitignore

@@ -12,9 +12,15 @@ if TYPE_CHECKING:
 PRICE_FIELDS = ("open", "high", "low", "close")
 
 
-def _exclusive_reverse_cumprod(values: pd.Series) -> pd.Series:
+def _exclusive_reverse_cumprod(values: pd.Series, symbols: pd.Series) -> pd.Series:
+    """Per symbol, the product of the values on later rows (1.0 on the latest row).
+
+    ``values`` must be ordered by symbol, then date; the result keeps its index.
+    """
     reversed_values = values.iloc[::-1]
-    return reversed_values.cumprod().shift(1, fill_value=1.0).iloc[::-1]
+    reversed_symbols = symbols.iloc[::-1]
+    products = reversed_values.groupby(reversed_symbols, sort=False).cumprod()
+    return products.groupby(reversed_symbols, sort=False).shift(1, fill_value=1.0).iloc[::-1]
 
 
 def _volume_factors(frame: pd.DataFrame, price_factors: pd.Series) -> pd.Series:
@@ -49,18 +55,28 @@ def apply_vendor_adjustment(
     if int(numeric.isna().sum()):
         raise ValueError("Null adjustment_factor values are not allowed when qlib.adjustment is vendor_factor.")
     out["adjustment_factor"] = numeric
-    pieces: list[pd.DataFrame] = []
-    for _, group in out.groupby("symbol", sort=False):
-        group = group.sort_values("date")
-        price_cum = _exclusive_reverse_cumprod(group["adjustment_factor"])
-        volume_cum = _exclusive_reverse_cumprod(_volume_factors(group, group["adjustment_factor"]))
-        adjusted = group.copy()
-        for field in PRICE_FIELDS:
-            adjusted[field] = adjusted[field] * price_cum
-        adjusted["volume"] = adjusted["volume"] / volume_cum
-        adjusted["factor"] = price_cum
-        pieces.append(adjusted)
-    if not pieces:
+    # Vectorised over all symbols (a per-symbol Python loop dominated large
+    # builds). Rows come out grouped by symbol in first-appearance order, each
+    # symbol sorted by date; rows without a symbol are dropped, as groupby does
+    # (with no symbol at all, the rows are returned unchanged with factor 1.0).
+    keyed = out[out["symbol"].notna()]
+    if keyed.empty:
         out["factor"] = 1.0
         return out
-    return pd.concat(pieces, ignore_index=True)
+    out = keyed.reset_index(drop=True)
+    symbol_order = pd.Series(pd.factorize(out["symbol"])[0], index=out.index)
+    ordered = out.iloc[
+        pd.DataFrame({"order": symbol_order, "date": out["date"]})
+        .sort_values(["order", "date"], kind="mergesort")
+        .index
+    ].reset_index(drop=True)
+    # float64 for the products: a nullable integer (Int64) factor, e.g. read back
+    # from Parquet, cannot take the grouped shift's 1.0 fill value.
+    factors = ordered["adjustment_factor"].astype("float64")
+    price_cum = _exclusive_reverse_cumprod(factors, ordered["symbol"])
+    volume_cum = _exclusive_reverse_cumprod(_volume_factors(ordered, factors), ordered["symbol"])
+    for field in PRICE_FIELDS:
+        ordered[field] = ordered[field] * price_cum
+    ordered["volume"] = ordered["volume"] / volume_cum
+    ordered["factor"] = price_cum
+    return ordered

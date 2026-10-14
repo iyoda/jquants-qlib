@@ -104,6 +104,129 @@ class NormalizeFundamentalsTests(unittest.TestCase):
         # the second (later DiscDate) must be the one that survives.
         self.assertEqual(by_code.loc["2026-06-03", "Eq"], 20.0)
 
+    def test_same_day_disclosures_merge_field_by_field_in_any_input_order(self) -> None:
+        # Results (NP) and a forecast revision (FNP) disclosed on the same day:
+        # each must keep the field it carries, whichever row comes first.
+        prior = {"Code": "10010", "DiscDate": "2026-06-01", "DiscTime": "15:00:00", "NP": 50.0, "FNP": 180.0}
+        results = {"Code": "10010", "DiscDate": "2026-06-03", "DiscTime": "15:00:00", "NP": 100.0, "FNP": None}
+        revision = {"Code": "10010", "DiscDate": "2026-06-03", "DiscTime": "15:30:00", "NP": None, "FNP": 200.0}
+        for rows in ([prior, results, revision], [revision, results, prior]):
+            with self.subTest(order=[row["DiscTime"] + str(row["NP"]) for row in rows]):
+                panel = normalize_fundamentals(pd.DataFrame(rows), _calendar())
+                by_code = panel.xs("10010", level="instrument")
+
+                self.assertEqual(by_code.loc["2026-06-04", "NP"], 100.0)
+                self.assertEqual(by_code.loc["2026-06-04", "FNP"], 200.0)
+                self.assertEqual(by_code.loc["2026-06-03", "NP"], 50.0)
+
+    def test_same_day_disclosures_resolve_conflicts_by_disc_time_then_disc_no(self) -> None:
+        early = {"Code": "10010", "DiscDate": "2026-06-03", "DiscTime": "13:00:00", "DiscNo": "900", "Eq": 1.0}
+        late = {"Code": "10010", "DiscDate": "2026-06-03", "DiscTime": "15:00:00", "DiscNo": "100", "Eq": 2.0}
+        first_no = {"Code": "10020", "DiscDate": "2026-06-03", "DiscTime": "15:00:00", "DiscNo": "9", "Eq": 3.0}
+        second_no = {"Code": "10020", "DiscDate": "2026-06-03", "DiscTime": "15:00:00", "DiscNo": "10", "Eq": 4.0}
+
+        panel = normalize_fundamentals(pd.DataFrame([late, early, second_no, first_no]), _calendar())
+
+        self.assertEqual(panel.loc[("2026-06-04", "10010"), "Eq"], 2.0)
+        self.assertEqual(panel.loc[("2026-06-04", "10020"), "Eq"], 4.0)  # DiscNo 10 > 9 numerically
+
+    def test_missing_or_unusable_order_keys_never_outrank_keyed_disclosures(self) -> None:
+        # A null/blank DiscTime or a non-numeric DiscNo sorts first, whatever the
+        # input order, so the properly keyed disclosure supplies the value.
+        cases = {
+            "null DiscTime": ({"DiscTime": None}, {"DiscTime": "15:00:00"}),
+            "blank DiscTime": ({"DiscTime": "  "}, {"DiscTime": "15:00:00"}),
+            "non-numeric DiscNo": ({"DiscTime": "15:00:00", "DiscNo": "x"}, {"DiscTime": "15:00:00", "DiscNo": "2"}),
+        }
+        for label, (unkeyed, keyed) in cases.items():
+            for rows in (
+                [{**unkeyed, "NP": 100.0}, {**keyed, "NP": 200.0}],
+                [{**keyed, "NP": 200.0}, {**unkeyed, "NP": 100.0}],
+            ):
+                with self.subTest(label, first=rows[0]["NP"]):
+                    raw = pd.DataFrame([{"Code": "10010", "DiscDate": "2026-06-03", **row} for row in rows])
+                    panel = normalize_fundamentals(raw, _calendar())
+
+                    self.assertEqual(panel.loc[("2026-06-04", "10010"), "NP"], 200.0)
+
+    def test_disc_no_beyond_float_precision_is_ordered_exactly(self) -> None:
+        # 2**53 + 1 and 2**53 collide as floats; one row also has a missing DiscNo.
+        rows = [
+            {"Code": "10010", "DiscDate": "2026-06-03", "DiscTime": "15:00:00", "DiscNo": "9007199254740993",
+             "Eq": 2.0},
+            {"Code": "10010", "DiscDate": "2026-06-03", "DiscTime": "15:00:00", "DiscNo": "09007199254740992",
+             "Eq": 1.0},
+            {"Code": "10010", "DiscDate": "2026-06-03", "DiscTime": "15:00:00", "DiscNo": None, "Eq": 0.0},
+        ]
+
+        panel = normalize_fundamentals(pd.DataFrame(rows), _calendar())
+
+        self.assertEqual(panel.loc[("2026-06-04", "10010"), "Eq"], 2.0)
+
+    def test_disc_no_compares_as_an_integer_whatever_its_dtype(self) -> None:
+        # An integer column with a missing value is read as float64 (10.0); mixed
+        # object columns occur too. Each must order like the integers they hold:
+        # the row with the largest DiscNo (Eq 4.0) wins, a missing one never does.
+        cases = {
+            "float": [(10.0, 4.0), (9.0, 3.0)],
+            "float with NaN": [(10.0, 4.0), (9.0, 3.0), (float("nan"), 9.0)],
+            "mixed": [("9", 2.0), (11.0, 4.0), (10, 3.0)],
+        }
+        for label, pairs in cases.items():
+            rows = [
+                {"Code": "10010", "DiscDate": "2026-06-03", "DiscTime": "15:00:00", "DiscNo": number, "Eq": eq}
+                for number, eq in pairs
+            ]
+            for ordered in (rows, list(reversed(rows))):
+                with self.subTest(label, first=ordered[0]["DiscNo"]):
+                    panel = normalize_fundamentals(pd.DataFrame(ordered), _calendar())
+
+                    self.assertEqual(panel.loc[("2026-06-04", "10010"), "Eq"], 4.0)
+
+    def test_disc_no_with_non_ascii_digits_is_not_a_usable_key(self) -> None:
+        # Full-width digits are not compared as numbers (they sort as missing keys).
+        rows = [
+            {"Code": "10010", "DiscDate": "2026-06-03", "DiscTime": "15:00:00", "DiscNo": "2", "Eq": 2.0},
+            {"Code": "10010", "DiscDate": "2026-06-03", "DiscTime": "15:00:00", "DiscNo": "\uff11\uff10", "Eq": 1.0},
+        ]
+
+        panel = normalize_fundamentals(pd.DataFrame(rows), _calendar())
+
+        self.assertEqual(panel.loc[("2026-06-04", "10010"), "Eq"], 2.0)
+
+    def test_disc_time_compares_as_a_time_of_day(self) -> None:
+        day = {"Code": "10010", "DiscDate": "2026-06-03"}
+        # "9:00" is earlier than "15:00" (a string comparison put it later).
+        later = pd.DataFrame([{**day, "DiscTime": "15:00", "Eq": 2.0}, {**day, "DiscTime": "9:00", "Eq": 1.0}])
+        self.assertEqual(normalize_fundamentals(later, _calendar()).loc[("2026-06-04", "10010"), "Eq"], 2.0)
+        # "15:00" and "15:00:00" are the same time, so DiscNo decides.
+        tie = pd.DataFrame([
+            {**day, "DiscTime": "15:00:00", "DiscNo": "2", "Eq": 2.0},
+            {**day, "DiscTime": "15:00", "DiscNo": "1", "Eq": 1.0},
+        ])
+        self.assertEqual(normalize_fundamentals(tie, _calendar()).loc[("2026-06-04", "10010"), "Eq"], 2.0)
+
+    def test_blank_cur_per_type_does_not_override_the_forward_filled_value(self) -> None:
+        rows = [
+            {"Code": "10010", "DiscDate": "2026-06-01", "CurPerType": "FY", "Eq": 1.0},
+            {"Code": "10010", "DiscDate": "2026-06-04", "CurPerType": " ", "Eq": 2.0},
+        ]
+
+        panel = normalize_fundamentals(pd.DataFrame(rows), _calendar())
+
+        self.assertEqual(panel.loc[("2026-06-05", "10010"), "Eq"], 2.0)
+        self.assertEqual(panel.loc[("2026-06-05", "10010"), "CurPerType"], "FY")
+
+    def test_blank_cur_per_type_does_not_override_a_same_day_value(self) -> None:
+        rows = [
+            {"Code": "10010", "DiscDate": "2026-06-03", "DiscTime": "15:00:00", "CurPerType": "FY"},
+            {"Code": "10010", "DiscDate": "2026-06-03", "DiscTime": "15:30:00", "CurPerType": ""},
+        ]
+
+        panel = normalize_fundamentals(pd.DataFrame(rows), _calendar())
+
+        self.assertEqual(panel.loc[("2026-06-04", "10010"), "CurPerType"], "FY")
+
     def test_clean_panel_has_zero_pit_violations_and_passes_gate(self) -> None:
         raw = pd.DataFrame(
             [

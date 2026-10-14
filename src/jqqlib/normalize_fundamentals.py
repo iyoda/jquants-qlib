@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import math
+import numbers
+import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -19,15 +22,59 @@ CARRY_STR = ["CurPerType"]
 
 SRC_DISC_DATE_COLUMN = "_src_DiscDate"
 
+# ASCII digits only: ``\d`` also matches other Unicode digits, which lstrip("0")
+# and the digit-count comparison below would not order correctly.
+_DIGITS_RE = re.compile(r"[0-9]+")
+_DISC_TIME_RE = re.compile(r"([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?")
+
+
+def _disc_no_key(value: object) -> str | None:
+    """``DiscNo`` as a non-negative integer in digits without leading zeros, else None.
+
+    Accepts digit strings and integer-valued numbers (an integer column with a
+    missing value is read as float64), so "10", 10 and 10.0 give the same key.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, numbers.Integral):
+        return str(int(value)) if int(value) >= 0 else None
+    if isinstance(value, numbers.Real):
+        number = float(value)
+        if math.isfinite(number) and number.is_integer() and number >= 0:
+            return str(int(number))
+        return None
+    text = str(value).strip()
+    if not _DIGITS_RE.fullmatch(text):
+        return None
+    return text.lstrip("0") or "0"
+
+
+def _disc_time_key(value: object) -> int | None:
+    """``DiscTime`` (``H:MM`` or ``HH:MM:SS``) as seconds after midnight, else None."""
+    if value is None:
+        return None
+    match = _DISC_TIME_RE.fullmatch(str(value).strip())
+    if match is None:
+        return None
+    hours, minutes, seconds = int(match[1]), int(match[2]), int(match[3] or 0)
+    if minutes > 59 or seconds > 59:
+        return None
+    return hours * 3600 + minutes * 60 + seconds
+
 
 def normalize_fundamentals(raw: pd.DataFrame, calendar: pd.DatetimeIndex) -> pd.DataFrame:
     """Build the as-of (point-in-time) fundamentals panel.
 
     PIT rule (conservative, look-ahead-free): a disclosure dated ``DiscDate`` D
     becomes effective on the first trading day STRICTLY AFTER D (``DiscTime`` is
-    ignored -- the conservative choice), then is forward-filled per code until
-    the next disclosure supersedes it. Rows before a code's first disclosure are
-    dropped (no fundamental is known as-of yet).
+    ignored for this -- the conservative choice), then is forward-filled per
+    code until the next disclosure supersedes it. Rows before a code's first
+    disclosure are dropped (no fundamental is known as-of yet).
+
+    Disclosures of one code that take effect on the same day (e.g. results and
+    a forecast revision on one ``DiscDate``) are merged field by field in
+    ``DiscDate`` / ``DiscTime`` / ``DiscNo`` order: the latest non-null value
+    of each field wins, as the forward fill does across days.
 
     Returns a frame indexed by a 2-level ``["datetime", "instrument"]``
     MultiIndex (StaticDataLoader-ready), with a ``_src_DiscDate`` provenance
@@ -50,6 +97,12 @@ def normalize_fundamentals(raw: pd.DataFrame, calendar: pd.DatetimeIndex) -> pd.
     for col in CARRY_NUM:
         if col in working.columns:
             working[col] = pd.to_numeric(working[col], errors="coerce")
+    # A blank string carries no value: make it null so it neither overrides a
+    # same-day disclosure nor the forward-filled one.
+    for col in CARRY_STR:
+        if col in working.columns:
+            blank = (working[col].astype("string").str.strip() == "").fillna(False)
+            working[col] = working[col].mask(blank)
 
     # effective date = first trading day STRICTLY AFTER DiscDate (no same-day use)
     pos = np.searchsorted(cal_arr, working["DiscDate"].to_numpy(), side="right")
@@ -60,11 +113,30 @@ def normalize_fundamentals(raw: pd.DataFrame, calendar: pd.DatetimeIndex) -> pd.
     present_num = [c for c in CARRY_NUM if c in working.columns]
     present_str = [c for c in CARRY_STR if c in working.columns]
     keep = ["Code", "eff_date", "DiscDate"] + present_num + present_str
-    # If two disclosures land on the same eff_date for a code, keep the latest DiscDate.
+    # Disclosure order within a day: DiscTime (as a time of day), then DiscNo
+    # (as an integer, compared exactly by digit count then digits); a stable
+    # sort keeps the input order only for disclosures that tie on all of them.
+    # A missing or unusable key sorts first, so it never outranks a keyed row.
+    order = ["Code", "DiscDate"]
+    if "DiscTime" in working.columns:
+        working["_disc_time"] = pd.Series(
+            [_disc_time_key(value) for value in working["DiscTime"]], index=working.index, dtype="Int64"
+        )
+        order.append("_disc_time")
+    if "DiscNo" in working.columns:
+        disc_no = [_disc_no_key(value) for value in working["DiscNo"]]
+        working["_disc_no_len"] = pd.Series(
+            [None if key is None else len(key) for key in disc_no], index=working.index, dtype="Int64"
+        )
+        working["_disc_no"] = pd.Series(disc_no, index=working.index, dtype="string")
+        order += ["_disc_no_len", "_disc_no"]
+    # Same-day disclosures merge field by field (GroupBy.last skips nulls), so
+    # a forecast revision does not drop the results published alongside it.
     ev = (
-        working[keep]
-        .sort_values(["Code", "DiscDate"])
-        .drop_duplicates(["Code", "eff_date"], keep="last")
+        working.sort_values(order, kind="mergesort", na_position="first")[keep]
+        .groupby(["Code", "eff_date"], sort=False)
+        .last()
+        .reset_index()
     )
 
     frames = []

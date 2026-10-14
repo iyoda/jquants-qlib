@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 
 from . import __version__
 from .audit import GapAuditResult, audit_dataset_gaps, write_audit_sidecar
-from .config import load_config, publish_check_git_ref, qlib_adjustment
+from .config import QLIB_ADJUSTMENT_VENDOR_FACTOR, load_config, publish_check_git_ref, qlib_adjustment
 from .dump import parquet_to_qlib
 from .fetch import _error_status, create_jquants_client, fetch_bulk_daily_quotes, fetch_daily_quotes
 from .manifest import (
@@ -157,7 +157,12 @@ def run_etl(config_path: Path, start_date: dt.date, end_date: dt.date) -> Path:
         retry_jitter_sec=etl_conf["retry_jitter_sec"],
         request_interval_sec=etl_conf["request_interval_sec"],
     )
-    return write_parquet(df, parquet_dir, merge_mode=etl_conf["merge_mode"])
+    return write_parquet(
+        df,
+        parquet_dir,
+        merge_mode=etl_conf["merge_mode"],
+        require_adjustment_factor=qlib_adjustment(config) == QLIB_ADJUSTMENT_VENDOR_FACTOR,
+    )
 
 
 def run_bootstrap_csv(config_path: Path, csv_path: Path) -> Path:
@@ -165,8 +170,10 @@ def run_bootstrap_csv(config_path: Path, csv_path: Path) -> Path:
     parquet_dir = Path(config["storage"]["parquet_dir"])
     qlib_dir = Path(config["storage"]["qlib_dir"])
 
-    parquet_path = csv_to_parquet(csv_path, parquet_dir)
     adjustment = qlib_adjustment(config)
+    parquet_path = csv_to_parquet(
+        csv_path, parquet_dir, require_adjustment_factor=adjustment == QLIB_ADJUSTMENT_VENDOR_FACTOR
+    )
     parquet_to_qlib(parquet_path, qlib_dir, adjustment=adjustment)
     write_dataset_artifacts(
         parquet_path=parquet_path, qlib_dir=qlib_dir, source=_csv_source(csv_path), adjustment=adjustment
@@ -350,7 +357,8 @@ def decide_publish(current_hash: str | None, committed_hash: str | None) -> bool
 
     Compares the content-only ``lineage.parquet_sha256`` of the freshly built
     dataset against what is committed on the configured ``publish_check.git_ref``
-    (default ``origin/main``). This is independent of
+    (default ``origin/main``); ``evaluate_publish_check`` also compares the
+    manifests' ``adjustment_policy``. This is independent of
     the per-run fetch window and of all manifest timestamps, so identical data
     never triggers a publish. A missing committed hash (first publish) counts as
     changed.
@@ -429,10 +437,10 @@ def _manifest_repo_relpath(config: dict, toplevel: Path) -> str:
     raise _GitLookupError(f"dataset manifest {tracked} is outside the git work tree {root}")
 
 
-def _committed_parquet_sha256(config: dict) -> str | None:
-    """Return ``lineage.parquet_sha256`` committed on ``publish_check.git_ref``.
+def _committed_manifest(config: dict) -> dict[str, Any] | None:
+    """Return the dataset manifest committed on ``publish_check.git_ref``.
 
-    ``None`` means the ref has no manifest at that path (a first publish).
+    ``None`` means the ref has no (readable) manifest at that path (a first publish).
     Raises ``_GitLookupError`` when the lookup itself cannot run (no git, not a
     work tree, unknown ref, manifest outside the work tree): treating those as a
     first publish would report "changed" on every run.
@@ -480,8 +488,7 @@ def _committed_parquet_sha256(config: dict) -> str | None:
         data = json.loads(content)
     except json.JSONDecodeError:
         return None
-    lineage = data.get("lineage", {})
-    return lineage.get("parquet_sha256") if isinstance(lineage, dict) else None
+    return data if isinstance(data, dict) else None
 
 
 def _quality_warning_summary(report: dict[str, Any]) -> str | None:
@@ -575,15 +582,22 @@ def evaluate_publish_check(config_path: Path) -> PublishCheckDecision:
         )
 
     try:
-        committed = _committed_parquet_sha256(config)
+        committed_manifest = _committed_manifest(config)
     except _GitLookupError as exc:
         return _publish_check_error(
             f"cannot read the committed manifest: {exc}",
             current_hash=current,
             quality_status=str(report_status),
         )
+    committed_lineage = committed_manifest.get("lineage", {}) if committed_manifest else {}
+    committed = committed_lineage.get("parquet_sha256") if isinstance(committed_lineage, dict) else None
     warning_summary = _quality_warning_summary(report)
-    changed = decide_publish(current, committed)
+    # Same Parquet, different adjustment (qlib.adjustment switched, or a producer
+    # change to the factor policy): the Qlib dataset differs, so it is a change.
+    changed = decide_publish(current, committed) or (
+        committed_manifest is not None
+        and manifest.get("adjustment_policy") != committed_manifest.get("adjustment_policy")
+    )
     return PublishCheckDecision(
         returncode=0 if changed else 3,
         reason="changed" if changed else "unchanged",
