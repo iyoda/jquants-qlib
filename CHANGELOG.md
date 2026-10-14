@@ -27,8 +27,9 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
 - The Qlib dump stages its build next to the resolved `storage.qlib_dir`, so a `qlib_dir` that is
   a symlink to another filesystem no longer fails with `Invalid cross-device link`.
 - Fundamentals disclosures of one code that take effect on the same day (e.g. results and a
-  forecast revision on one `DiscDate`) are merged field by field in `DiscDate` / `DiscTime` /
-  `DiscNo` order, latest non-null value first. Previously one whole row was kept, chosen by input
+  forecast revision on one `DiscDate`) are merged field by field in `DiscDate` / `DiscTime` (as a
+  time of day) / `DiscNo` (as an integer) order, latest non-null value first; a missing or
+  unparsable key counts as the earliest. Previously one whole row was kept, chosen by input
   order, so the new `NP` or the new `FNP` stayed stale until the next disclosure. Re-run
   `run-fundamentals-etl` to rebuild the panel.
 - With `qlib.adjustment: vendor_factor`, the quality report fails (`dumped_factor`) when the

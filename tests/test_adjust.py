@@ -85,6 +85,15 @@ class VendorAdjustmentTests(unittest.TestCase):
         self.assertEqual(len(dumped), len(raw))
         self.assertEqual(list(dumped["factor"]), [1.0] * len(raw))
 
+    def test_rows_without_a_symbol_are_dropped_like_the_reference(self) -> None:
+        raw = _series()
+        raw.loc[raw.index[1], "symbol"] = None
+
+        dumped = apply_vendor_adjustment(raw)
+
+        self.assertEqual(len(dumped), len(raw) - 1)
+        pd.testing.assert_frame_equal(dumped, _reference_vendor_adjustment(raw))
+
     def test_vectorised_adjustment_matches_the_per_symbol_reference(self) -> None:
         # Shuffled multi-symbol input with splits and rights issues: the
         # vectorised transform must equal the per-symbol loop it replaced, row

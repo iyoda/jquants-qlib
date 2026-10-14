@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import math
+import numbers
+import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -18,6 +21,45 @@ CARRY_NUM = [
 CARRY_STR = ["CurPerType"]
 
 SRC_DISC_DATE_COLUMN = "_src_DiscDate"
+
+# ASCII digits only: ``\d`` also matches other Unicode digits, which lstrip("0")
+# and the digit-count comparison below would not order correctly.
+_DIGITS_RE = re.compile(r"[0-9]+")
+_DISC_TIME_RE = re.compile(r"([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?")
+
+
+def _disc_no_key(value: object) -> str | None:
+    """``DiscNo`` as a non-negative integer in digits without leading zeros, else None.
+
+    Accepts digit strings and integer-valued numbers (an integer column with a
+    missing value is read as float64), so "10", 10 and 10.0 give the same key.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, numbers.Integral):
+        return str(int(value)) if int(value) >= 0 else None
+    if isinstance(value, numbers.Real):
+        number = float(value)
+        if math.isfinite(number) and number.is_integer() and number >= 0:
+            return str(int(number))
+        return None
+    text = str(value).strip()
+    if not _DIGITS_RE.fullmatch(text):
+        return None
+    return text.lstrip("0") or "0"
+
+
+def _disc_time_key(value: object) -> int | None:
+    """``DiscTime`` (``H:MM`` or ``HH:MM:SS``) as seconds after midnight, else None."""
+    if value is None:
+        return None
+    match = _DISC_TIME_RE.fullmatch(str(value).strip())
+    if match is None:
+        return None
+    hours, minutes, seconds = int(match[1]), int(match[2]), int(match[3] or 0)
+    if minutes > 59 or seconds > 59:
+        return None
+    return hours * 3600 + minutes * 60 + seconds
 
 
 def normalize_fundamentals(raw: pd.DataFrame, calendar: pd.DatetimeIndex) -> pd.DataFrame:
@@ -71,20 +113,22 @@ def normalize_fundamentals(raw: pd.DataFrame, calendar: pd.DatetimeIndex) -> pd.
     present_num = [c for c in CARRY_NUM if c in working.columns]
     present_str = [c for c in CARRY_STR if c in working.columns]
     keep = ["Code", "eff_date", "DiscDate"] + present_num + present_str
-    # Disclosure order within a day: DiscTime, then DiscNo (as an integer,
-    # compared exactly by digit count then digits); a stable sort keeps the
-    # input order only for disclosures that tie on all of them. A missing or
-    # unusable key sorts first, so it never outranks a properly keyed row.
+    # Disclosure order within a day: DiscTime (as a time of day), then DiscNo
+    # (as an integer, compared exactly by digit count then digits); a stable
+    # sort keeps the input order only for disclosures that tie on all of them.
+    # A missing or unusable key sorts first, so it never outranks a keyed row.
     order = ["Code", "DiscDate"]
     if "DiscTime" in working.columns:
-        disc_time = working["DiscTime"].astype("string").str.strip()
-        working["_disc_time"] = disc_time.mask(disc_time == "")
+        working["_disc_time"] = pd.Series(
+            [_disc_time_key(value) for value in working["DiscTime"]], index=working.index, dtype="Int64"
+        )
         order.append("_disc_time")
     if "DiscNo" in working.columns:
-        disc_no = working["DiscNo"].astype("string").str.strip()
-        digits = disc_no.where(disc_no.str.fullmatch(r"\d+").fillna(False)).str.lstrip("0").replace("", "0")
-        working["_disc_no_len"] = digits.str.len()
-        working["_disc_no"] = digits
+        disc_no = [_disc_no_key(value) for value in working["DiscNo"]]
+        working["_disc_no_len"] = pd.Series(
+            [None if key is None else len(key) for key in disc_no], index=working.index, dtype="Int64"
+        )
+        working["_disc_no"] = pd.Series(disc_no, index=working.index, dtype="string")
         order += ["_disc_no_len", "_disc_no"]
     # Same-day disclosures merge field by field (GroupBy.last skips nulls), so
     # a forecast revision does not drop the results published alongside it.
