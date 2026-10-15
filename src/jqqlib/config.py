@@ -14,7 +14,8 @@ DEFAULT_PUBLISH_CHECK_GIT_REF = "origin/main"
 def qlib_adjustment(config: dict) -> str:
     """Return the validated ``qlib.adjustment``, ``vendor_factor`` when unset.
 
-    Raises ``ValueError`` when ``qlib`` is not a mapping or the value is neither ``vendor_factor`` nor ``none``.
+    Raises ``ValueError`` when ``qlib`` is not a mapping or the value is neither ``vendor_factor`` nor ``none``, and
+    ``TypeError`` when the value is unhashable, such as a list.
     """
     qlib = config.get("qlib", {})
     if qlib is None:
@@ -35,8 +36,12 @@ def load_config(path: Path) -> dict:
 
     ``storage.parquet_dir`` and ``storage.qlib_dir`` are required; ``storage.audit_dir``, ``qlib.adjustment`` and
     ``publish_check.git_ref`` get their defaults. Relative storage paths stay relative to the working directory.
-    Raises ``FileNotFoundError`` for a missing file and ``ValueError`` for invalid YAML, a document or a ``storage``,
-    ``qlib`` or ``publish_check`` section that is not a mapping, or an invalid value.
+    An empty ``publish_check`` section (``null``) gets the default ``git_ref``.
+
+    Raises ``FileNotFoundError`` for a missing file and ``ValueError`` for invalid YAML, a document or a ``storage``
+    or ``qlib`` section that is not a mapping, a ``publish_check`` section that is neither a mapping nor empty, a
+    missing or invalid storage path, an unknown ``qlib.adjustment`` or an invalid ``git_ref``. An unhashable
+    ``qlib.adjustment`` such as a list raises ``TypeError``.
     """
     import yaml
 

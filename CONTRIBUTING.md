@@ -78,8 +78,9 @@ comments. Other file types there, such as `scripts/run_daily.sh`, are out of sco
   `# type: ignore[<code>]  # <reason>` (mypy rejects a reason without its own `#`), and
   `# noqa: <CODE>[, <CODE>]` with nothing after it.
 - Docstrings belong only to the public API of the typed package, and are required there: modules, classes,
-  functions and methods in `src/jqqlib` whose names do not start with `_` (dunder methods count as public).
-  None on private definitions, on definitions inside functions, or in `scripts/`. Do not declare `__all__`
+  functions and methods in `src/jqqlib` whose own name and every enclosing module and class name do not start
+  with `_` (dunder methods count as public). None on anything else: not in a `_`-prefixed module or class, not on
+  definitions inside functions, and not in `scripts/`. Do not declare `__all__`
   outside `src/jqqlib/__init__.py`: ruff's `D1` would stop requiring docstrings on names left out of it.
 - Background that neither a name nor a test can carry (why a design was chosen, what it avoids) goes in
   [docs/design-notes.md](docs/design-notes.md). `tests/test_design_notes.py` fails when a name, test, path or

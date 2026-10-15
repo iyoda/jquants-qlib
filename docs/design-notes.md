@@ -6,13 +6,13 @@
 振る舞いそのものは各 docstring と [運用](operations.md)・[設定](configuration.md)・[財務](fundamentals.md) にあり、
 ここでは繰り返しません。コメントと docstring の規約は [CONTRIBUTING](../CONTRIBUTING.md#comments-and-docstrings)
 にあります。名前を変えたら、このページも同じ変更で直してください（`tests/test_design_notes.py` が、
-ここに書いた名前・テスト名・パスの実在を検査します）。
+ここに書いた名前・テスト名・パス・ファイル名の実在を検査します）。
 
 ## 取得（`fetch.py`）
 
 ### API リトライの分類
 
-HTTP ステータスがあればそれだけで判定し、429 / 5xx だけを再試行します。`requests.HTTPError` は `OSError`
+HTTP ステータスがあればそれだけで判定し、429 / 500 / 502 / 503 / 504 だけを再試行します。`requests.HTTPError` は `OSError`
 のサブクラスなので、型を先に見ると 401 / 403 / 404 や、日単位へのフォールバックを起こす 400 まで再試行して
 しまうためです。ステータスも型も持たない一時的な失敗（途切れた chunked 応答、名前解決の失敗、接続リセット）は
 メッセージで拾いますが、認証失敗は含めません。API キー（`ClientV2`）は静的で、再試行しても直らないからです。
@@ -29,7 +29,8 @@ HTTP ステータスがあればそれだけで判定し、429 / 5xx だけを�
   テスト: `test_missing_credentials_raise_value_error_without_importing_jquantsapi`
 - Keychain は `-w` で値そのものを読みます（存在確認だけの用途では `-w` を付けない）。読んだ値はログ・標準出力・
   例外メッセージのどこにも出してはいけません。値が空、項目が無い、`security` が無い（Linux など）のいずれでも
-  次の資格情報源へ進みます。service 名の環境変数は、import 後の設定も効くよう呼び出しのたびに読みます。
+  次の資格情報源へ進みます。service 名は、別の命名規約のツールと Keychain を共有できるよう環境変数で上書きでき、import 後の設定も効くよう
+  呼び出しのたびに読みます。
   名前: `_read_keychain_secret_value_or_none`。テスト: `test_empty_keychain_api_key_falls_through_to_the_refresh_token`、
   `test_missing_security_command_is_no_credential_rather_than_a_crash`、
   `test_keychain_service_name_env_override_is_read_at_call_time`
@@ -138,6 +139,12 @@ XTKS の休場日に当たる平日は、以前の月〜金の判定なら欠損
 
 - テスト: `tests/test_audit.py` の `test_exchange_holiday_is_suppressed_not_flagged`、
   `test_date_out_of_bounds_fails_closed_not_as_a_gap`
+
+## 設定（`config.py`）
+
+`storage.*` の相対パスは YAML の置き場所ではなく作業ディレクトリを基準にします。後から加えた `audit_dir` も、
+それ以前からある `parquet_dir` / `qlib_dir` の利用側に合わせて同じ基準にしています。
+テスト: `tests/test_config.py` の `test_storage_paths_keep_working_directory_semantics`
 
 ## 財務（`fetch_fundamentals.py` / `normalize_fundamentals.py`）
 

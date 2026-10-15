@@ -313,12 +313,13 @@ def run_daily(
     runner: RunAllCallable = run_incremental,
     dataset_end_reader: DatasetEndReader = read_existing_dataset_end,
 ) -> dt.date:
-    """Import from the day after the dataset end up to the latest XTKS session; return that session.
+    """Import up to the latest XTKS session that has data; return that session.
 
-    ``runner`` gets the whole catch-up range at once and succeeds when any day in it has data. Only when the whole
-    range is empty is the next earlier session tried, up to ``max_lookback_business_days`` back. Raises
-    ``NoDataFetchedError`` when every range is empty and ``ExactCalendarRequired`` when the XTKS calendar is
-    unavailable.
+    The range starts the day after the dataset end, or at the session itself when there is no dataset yet or the
+    dataset already reaches it. ``runner`` gets the whole range at once and succeeds when any day in it has data.
+    Only when the whole range is empty is the next earlier session tried, up to ``max_lookback_business_days``
+    back. Raises ``NoDataFetchedError`` when every range is empty and ``ExactCalendarRequired`` when the XTKS
+    calendar is unavailable.
     """
     last_no_data: NoDataFetchedError | None = None
     existing_dataset_end = dataset_end_reader(config_path)
@@ -541,7 +542,8 @@ def evaluate_publish_check(config_path: Path) -> PublishCheckDecision:
 
     Fails closed with ``returncode`` 1 when the manifest or the quality report is missing, unreadable or not a JSON
     object, the manifest lacks ``lineage.parquet_sha256``, a status is unknown or ``fail``, the two disagree on
-    status or ``dataset_id``, or the git lookup cannot run (no git, not a work tree, unknown ref). A committed
+    status or ``dataset_id``, or the git lookup cannot run (no git, not a work tree, unknown ref, a manifest outside
+    the work tree). A committed
     manifest that is absent or not valid JSON counts as a first publish (``returncode`` 0).
     """
     config = load_config(config_path)
