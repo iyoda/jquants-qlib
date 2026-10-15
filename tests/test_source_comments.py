@@ -131,6 +131,33 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("scripts/secret.py: cannot be checked: PermissionError", stderr)
 
+    @unittest.skipIf(os.geteuid() == 0, "root can enter a directory without permission")
+    def test_a_directory_that_cannot_be_entered_is_reported_whether_walked_or_named(self) -> None:
+        hidden = self._write("src/jqqlib/locked/hidden.py", "x = 1  # unseen\n")
+        hidden.parent.chmod(0)
+        self.addCleanup(hidden.parent.chmod, 0o755)
+
+        walked_code, walked_stderr = self._run()
+        named_code, named_stderr = self._run(hidden)
+
+        self.assertEqual(walked_code, 1)
+        self.assertIn("src/jqqlib/locked: cannot be checked: PermissionError", walked_stderr)
+        self.assertEqual(named_code, 1)
+        self.assertIn("src/jqqlib/locked/hidden.py: cannot be checked: PermissionError", named_stderr)
+
+    def test_a_symlink_from_one_governed_tree_into_the_other_follows_the_rules_of_its_own_tree(self) -> None:
+        self._write("src/jqqlib/public.py", 'def api():\n    """Doc."""\n')
+        self._write("scripts/tool.py", "def run():\n    return 1\n")
+        script_alias = self.root / "scripts/alias.py"
+        package_alias = self.root / "src/jqqlib/tool_alias.py"
+        os.symlink(self.root / "src/jqqlib/public.py", script_alias)
+        os.symlink(self.root / "scripts/tool.py", package_alias)
+
+        code, stderr = self._run(script_alias, package_alias)
+
+        self.assertEqual(code, 1)
+        self.assertEqual([line.split(": docstring on ")[0] for line in stderr.splitlines()], ["scripts/alias.py:2"])
+
     def test_a_python_named_symlink_is_checked_whatever_its_target_is_called(self) -> None:
         self._write("src/jqqlib/notes.txt", "x = 1  # hidden behind a .txt target\n")
         os.symlink(self.root / "src/jqqlib/notes.txt", self.root / "src/jqqlib/alias.py")

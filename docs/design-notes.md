@@ -172,10 +172,12 @@ PIT の規則そのものは [財務](fundamentals.md#pitpoint-in-timeの意味)
 
 ## スクリプト（`scripts/`）
 
-- `check_comments.py`: CONTRIBUTING の規約を検査します。`src/jqqlib` と `scripts` の外のパスは無視するので、
-  lefthook がステージしたファイルの一覧をそのまま渡せます。シンボリックリンクは、管轄かどうかと読み取りには
-  リンク先の実体を、拡張子と公開 API の判定には import されるときのパスを使います（`governed_relative_path`）。
-  読めないファイルは traceback ではなく違反として報告します。
+- `check_comments.py`: CONTRIBUTING の規約を検査します。`src/jqqlib` と `scripts` の外のパスと、存在しない
+  ファイル（壊れたリンクを含む）は無視するので、lefthook がステージしたファイルの一覧をそのまま渡せます。
+  - シンボリックリンクは、リンク先の実体が `src/jqqlib` か `scripts` にあるときだけ検査します。どちらの規則を
+    当てるか（公開 API か、`scripts` か）と拡張子は、リンク自身のパス、つまり import や実行に使われるパスで
+    決めます。リンク自身がどちらの外にあるときだけ、実体のパスで決めます（`governed_relative_path`）。
+  - 管轄内の、開けないディレクトリや読めないファイルは、traceback でも無言の通過でもなく、違反として報告します。
 - `check_qlib.py`: Qlib には JP のリージョン定数が無いので、US 以外の既定の `REG_CN` を使います
   （`QLIB_NON_US_REGION_FOR_JP_DATA`）。
 - `dist_smoke.py`: リポジトリの外から、`PYTHONPATH` をチェックアウトに向けずに実行し（手順は

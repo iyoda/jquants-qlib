@@ -68,32 +68,50 @@ def docstrings_outside_public_api(source: str, *, public_api_module: bool) -> li
     return found
 
 
+def is_governed(relative_path: Path) -> bool:
+    return any(relative_path.is_relative_to(governed) for governed in COMMENT_FREE_ROOTS)
+
+
 def governed_relative_path(candidate: Path, *, logical_root: Path, root: Path) -> Path | None:
     if candidate.suffix != ".py":
         return None
     logical_relative = Path(os.path.relpath(candidate, logical_root))
     try:
         real = candidate.resolve()
+        if not real.is_file():
+            return None
     except (OSError, RuntimeError):
-        is_governed = any(logical_relative.is_relative_to(governed) for governed in COMMENT_FREE_ROOTS)
-        return logical_relative if is_governed else None
-    if not real.is_file():
-        return None
+        return logical_relative if is_governed(logical_relative) else None
     for governed in COMMENT_FREE_ROOTS:
         real_governed = (root / governed).resolve()
         if real.is_relative_to(real_governed):
-            if logical_relative.is_relative_to(governed):
-                return logical_relative
-            return governed / real.relative_to(real_governed)
+            return logical_relative if is_governed(logical_relative) else governed / real.relative_to(real_governed)
     return None
 
 
-def governed_python_files(paths: Iterable[Path], *, root: Path) -> list[tuple[Path, Path]]:
+def python_files_under(directory: Path, unreadable_directories: list[OSError]) -> list[Path]:
+    return sorted(
+        Path(parent, name)
+        for parent, _, names in os.walk(directory, onerror=unreadable_directories.append)
+        for name in names
+        if name.endswith(".py")
+    )
+
+
+def governed_python_files(paths: Iterable[Path], *, root: Path) -> list[tuple[Path, Path | OSError]]:
     logical_root = Path(os.path.abspath(root))
-    files: dict[Path, Path] = {}
+    files: dict[Path, Path | OSError] = {}
     for path in paths:
         logical = Path(os.path.abspath(path))
-        candidates = sorted(logical.rglob("*.py")) if logical.is_dir() else [logical]
+        unreadable_directories: list[OSError] = []
+        try:
+            candidates = python_files_under(logical, unreadable_directories) if logical.is_dir() else [logical]
+        except OSError:
+            candidates = [logical]
+        for error in unreadable_directories:
+            relative_directory = Path(os.path.relpath(str(error.filename), logical_root))
+            if is_governed(relative_directory):
+                files.setdefault(relative_directory, error)
         for candidate in candidates:
             relative = governed_relative_path(candidate, logical_root=logical_root, root=root)
             if relative is not None:
@@ -104,6 +122,9 @@ def governed_python_files(paths: Iterable[Path], *, root: Path) -> list[tuple[Pa
 def violations(paths: Iterable[Path], *, root: Path = REPO_ROOT) -> list[str]:
     found = []
     for relative, path in governed_python_files(paths, root=root):
+        if isinstance(path, OSError):
+            found.append(f"{relative}: cannot be checked: {type(path).__name__}: {path}")
+            continue
         try:
             source = path.read_text(encoding="utf-8")
             comments = explanatory_comments(source)
