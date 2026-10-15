@@ -267,9 +267,10 @@ def fetch_daily_quotes(
 
     With ``codes`` there is one request per code and window, otherwise one request per window for all codes.
     ``ClientV2`` uses ``get_eq_bars_daily`` and, when an all-codes window is rejected with HTTP 400, requests that
-    window one day at a time; the legacy client uses ``get_prices_daily_quotes``. Every request goes through
-    ``call_jquants_with_retry`` and is spaced by ``request_interval_sec``. Returns the raw J-Quants columns with a
-    timezone-naive ``Date``, or an empty frame when nothing was returned.
+    window one day at a time; the legacy client uses ``get_prices_daily_quotes``. Each request is retried by
+    ``call_jquants_with_retry`` with its own backoff, and consecutive requests (not retries) are spaced by
+    ``request_interval_sec``. Returns the raw J-Quants columns with a timezone-naive ``Date``, or an empty frame
+    when nothing was returned.
     """
     import pandas as pd
 
@@ -380,7 +381,7 @@ def fetch_bulk_daily_quotes(
     """Download the monthly bulk daily-quote files that overlap ``start_date`` to ``end_date``.
 
     Returns the rows inside the range with a timezone-naive ``Date``. Raises ``ValueError`` when J-Quants lists no
-    bulk files or none covers the requested months; the message names the available month range.
+    bulk files, or when none covers the requested months; only the latter message names the available months.
     """
     import pandas as pd
     from jquantsapi import BulkEndpoint

@@ -35,7 +35,8 @@ def load_config(path: Path) -> dict:
 
     ``storage.parquet_dir`` and ``storage.qlib_dir`` are required; ``storage.audit_dir``, ``qlib.adjustment`` and
     ``publish_check.git_ref`` get their defaults. Relative storage paths stay relative to the working directory.
-    Raises ``ValueError`` for invalid YAML, a non-mapping section or an invalid value.
+    Raises ``FileNotFoundError`` for a missing file and ``ValueError`` for invalid YAML, a document or a ``storage``,
+    ``qlib`` or ``publish_check`` section that is not a mapping, or an invalid value.
     """
     import yaml
 

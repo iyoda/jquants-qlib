@@ -83,7 +83,8 @@ def _coerce_float(etl_conf: dict[str, Any], key: str, default: float) -> float:
 def validate_etl_config(config: dict) -> dict[str, Any]:
     """Return the ``etl`` settings with their defaults applied.
 
-    Raises ``ValueError`` for a non-mapping section, a non-numeric or negative value, ``chunk_days`` below 1,
+    Raises ``ValueError`` when the configuration or its ``etl`` section is not a mapping, or a value is invalid: a
+    boolean, a non-integral count, a non-finite or negative number, ``chunk_days`` below 1,
     ``retry_max_delay_sec`` below ``retry_base_delay_sec``, or an unknown ``merge_mode``.
     """
     if not isinstance(config, dict):
@@ -312,11 +313,12 @@ def run_daily(
     runner: RunAllCallable = run_incremental,
     dataset_end_reader: DatasetEndReader = read_existing_dataset_end,
 ) -> dt.date:
-    """Import the most recent XTKS session that has data, catching up from the dataset end; return that session.
+    """Import from the day after the dataset end up to the latest XTKS session; return that session.
 
-    Sessions are tried from ``as_of`` backwards, at most ``max_lookback_business_days`` back, while a fetch returns
-    no data. Raises ``NoDataFetchedError`` when none has data and ``ExactCalendarRequired`` when the XTKS calendar
-    is unavailable.
+    ``runner`` gets the whole catch-up range at once and succeeds when any day in it has data. Only when the whole
+    range is empty is the next earlier session tried, up to ``max_lookback_business_days`` back. Raises
+    ``NoDataFetchedError`` when every range is empty and ``ExactCalendarRequired`` when the XTKS calendar is
+    unavailable.
     """
     last_no_data: NoDataFetchedError | None = None
     existing_dataset_end = dataset_end_reader(config_path)
@@ -537,8 +539,10 @@ def _publish_check_error(
 def evaluate_publish_check(config_path: Path) -> PublishCheckDecision:
     """Compare the working-tree dataset manifest with the one committed on ``publish_check.git_ref``.
 
-    Fails closed with ``returncode`` 1 when the manifest or the quality report is missing or invalid, either
-    reports a ``fail`` status, they disagree, or the committed manifest cannot be looked up.
+    Fails closed with ``returncode`` 1 when the manifest or the quality report is missing, unreadable or not a JSON
+    object, the manifest lacks ``lineage.parquet_sha256``, a status is unknown or ``fail``, the two disagree on
+    status or ``dataset_id``, or the git lookup cannot run (no git, not a work tree, unknown ref). A committed
+    manifest that is absent or not valid JSON counts as a first publish (``returncode`` 0).
     """
     config = load_config(config_path)
 
