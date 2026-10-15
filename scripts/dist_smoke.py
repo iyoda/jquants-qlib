@@ -1,15 +1,3 @@
-"""Check an installed distribution; invoke from outside the repository.
-
-Run WITHOUT ``PYTHONPATH`` pointing at the checkout: ``jqqlib`` must resolve from
-the installed wheel, and the wheel does not ship ``tests/``, so the CSV fixture
-below is the inline fallback. That fallback is the path CI exercises; the richer
-``tests.support.synthetic`` helper is covered by the unittest suite instead.
-
-The CLI is driven through the ``jqqlib`` console script installed next to the
-running interpreter, not ``python -m jqqlib.pipeline``, so the entry point that
-pip users get is the one under test.
-"""
-
 import csv
 import datetime as dt
 import importlib.metadata
@@ -34,8 +22,7 @@ SMOKE_START, SMOKE_END = "2026-06-01", "2026-06-05"
 QLIB_BIN_LITTLE_ENDIAN_FLOAT32 = "<f"
 
 
-def console_script() -> str:
-    """Locate the ``jqqlib`` console script of the interpreter running this smoke."""
+def installed_jqqlib_console_script() -> str:
     candidate = Path(sys.executable).parent / "jqqlib"
     if candidate.is_file():
         return str(candidate)
@@ -45,7 +32,7 @@ def console_script() -> str:
     return found
 
 
-JQQLIB = console_script()
+JQQLIB = installed_jqqlib_console_script()
 
 
 def run_cli(*arguments: str) -> subprocess.CompletedProcess[str]:

@@ -391,59 +391,42 @@ def _read_json_object(path: Path, artifact_name: str) -> tuple[dict[str, Any] | 
     return payload, None
 
 
-class _GitLookupError(Exception):
-    """The committed manifest could not be looked up (as opposed to: it is absent)."""
+class _CommittedManifestLookupFailed(Exception):
+    pass
 
 
 def _git(args: list[str], cwd: Path | None) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
     except OSError as exc:
-        raise _GitLookupError(f"git is not available: {exc}") from exc
+        raise _CommittedManifestLookupFailed(f"git is not available: {exc}") from exc
 
 
 def _git_toplevel() -> Path:
     result = _git(["rev-parse", "--show-toplevel"], cwd=None)
     if result.returncode != 0:
-        raise _GitLookupError(f"not inside a git work tree: {result.stderr.strip()}")
+        raise _CommittedManifestLookupFailed(f"not inside a git work tree: {result.stderr.strip()}")
     return Path(result.stdout.strip())
 
 
-def _manifest_repo_relpath(config: dict, toplevel: Path) -> str:
-    """Path of the working-tree manifest relative to the git work tree root.
-
-    ``git show <ref>:<path>`` resolves ``path`` from the repository root, not
-    from the current directory, so an absolute ``storage.qlib_dir`` or a run
-    from a subdirectory must be mapped first. Only the longest leading part
-    that resolves to the work tree root is replaced: an absolute path spelled
-    through a symlink (macOS ``/var`` -> ``/private/var``) still maps, while
-    symlinks inside the repository (the ``publish`` provider link) stay in the
-    git path and are followed in git, below.
-    """
+def _manifest_path_from_repo_root(config: dict, toplevel: Path) -> str:
     tracked = Path(os.path.abspath(Path(config["storage"]["qlib_dir"]) / DATASET_MANIFEST_FILENAME))
     root = toplevel.resolve()
     parts = tracked.parts
     for size in range(len(parts) - 1, 0, -1):
         if Path(*parts[:size]).resolve() == root:
             return Path(*parts[size:]).as_posix()
-    raise _GitLookupError(f"dataset manifest {tracked} is outside the git work tree {root}")
+    raise _CommittedManifestLookupFailed(f"dataset manifest {tracked} is outside the git work tree {root}")
 
 
 def _committed_manifest(config: dict) -> dict[str, Any] | None:
-    """Return the dataset manifest committed on ``publish_check.git_ref``.
-
-    ``None`` means the ref has no (readable) manifest at that path (a first publish).
-    Raises ``_GitLookupError`` when the lookup itself cannot run (no git, not a
-    work tree, unknown ref, manifest outside the work tree): treating those as a
-    first publish would report "changed" on every run.
-    """
     ref = publish_check_git_ref(config)
     toplevel = _git_toplevel()
     if _git(["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd=toplevel).returncode != 0:
-        raise _GitLookupError(
+        raise _CommittedManifestLookupFailed(
             f"publish_check.git_ref {ref!r} does not name a commit; fetch it or fix publish_check.git_ref"
         )
-    rel = _manifest_repo_relpath(config, toplevel)
+    rel = _manifest_path_from_repo_root(config, toplevel)
 
     def read_committed_file_following_symlinks(path: str, depth: int = 0) -> str | None:
         if depth > 8:
@@ -573,7 +556,7 @@ def evaluate_publish_check(config_path: Path) -> PublishCheckDecision:
 
     try:
         committed_manifest = _committed_manifest(config)
-    except _GitLookupError as exc:
+    except _CommittedManifestLookupFailed as exc:
         return _publish_check_error(
             f"cannot read the committed manifest: {exc}",
             current_hash=current,
@@ -628,7 +611,6 @@ def parse_date(v: str) -> dt.date:
 
 
 def _now(tz: dt.tzinfo) -> dt.datetime:
-    """Return the current time in ``tz``. Patchable so as-of tests can freeze the clock."""
     return dt.datetime.now(tz)
 
 
@@ -759,20 +741,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 class _BelowWarningFilter(logging.Filter):
-    """Keep WARNING+ off the stdout handler so they appear only on stderr."""
-
     def filter(self, record: logging.LogRecord) -> bool:
         return record.levelno < logging.WARNING
 
 
 def _configure_cli_logging() -> None:
-    """Attach stdout/stderr handlers for the ``jqqlib`` hierarchy at the CLI boundary.
-
-    Library importers see no handlers (silence by default). ``main()`` installs
-    these for the duration of one CLI invocation so progress ``INFO`` lines still
-    print on stdout and warnings on stderr, matching the previous ``print()``
-    behaviour. Never call ``logging.basicConfig`` from library code.
-    """
     if _CLI_HANDLERS:
         return
     root = logging.getLogger("jqqlib")

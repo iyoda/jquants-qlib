@@ -1,45 +1,25 @@
 from __future__ import annotations
 
+import contextlib
+import importlib.util
 import io
-import re
-import tokenize
+import tempfile
 import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-COMMENT_FREE_TREES = ("src/jqqlib", "scripts")
-TOOL_DIRECTIVE_PATTERNS = (
-    re.compile(r"# pragma: no cover"),
-    re.compile(r"# type: ignore\[[a-z0-9-]+(?:, ?[a-z0-9-]+)*\]\s+#\s*\S.*"),
-    re.compile(r"# noqa: [A-Z]+[0-9]+(?:, ?[A-Z]+[0-9]+)*"),
-)
+_SPEC = importlib.util.spec_from_file_location("check_comments_script", REPO_ROOT / "scripts" / "check_comments.py")
+assert _SPEC is not None and _SPEC.loader is not None
+check_comments = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(check_comments)
 
 
-def _is_tool_directive(comment: str) -> bool:
-    return any(pattern.fullmatch(comment.rstrip()) for pattern in TOOL_DIRECTIVE_PATTERNS)
-
-
-def _explanatory_comments(source: str) -> list[tuple[int, str]]:
-    found = []
-    for token in tokenize.generate_tokens(io.StringIO(source).readline):
-        if token.type != tokenize.COMMENT:
-            continue
-        is_shebang = token.start == (1, 0) and token.string.startswith("#!")
-        if is_shebang or _is_tool_directive(token.string):
-            continue
-        found.append((token.start[0], token.string))
-    return found
-
-
-class SourceCommentPolicyTests(unittest.TestCase):
+class RepositoryPolicyTests(unittest.TestCase):
     def test_production_code_states_intent_through_names_and_tests_not_comments(self) -> None:
-        offenders = []
-        for tree in COMMENT_FREE_TREES:
-            for path in sorted((REPO_ROOT / tree).rglob("*.py")):
-                for line, comment in _explanatory_comments(path.read_text(encoding="utf-8")):
-                    offenders.append(f"{path.relative_to(REPO_ROOT)}:{line}: {comment}")
-        self.assertEqual(offenders, [])
+        self.assertEqual(check_comments.violations([REPO_ROOT / "src/jqqlib", REPO_ROOT / "scripts"]), [])
 
+
+class CommentRuleTests(unittest.TestCase):
     def test_shebang_and_well_formed_tool_directives_are_allowed(self) -> None:
         for source in (
             "#!/usr/bin/env python\nx = 1\n",
@@ -50,7 +30,7 @@ class SourceCommentPolicyTests(unittest.TestCase):
             "x = 1  # noqa: F401, E402\n",
         ):
             with self.subTest(source=source):
-                self.assertEqual(_explanatory_comments(source), [])
+                self.assertEqual(check_comments.explanatory_comments(source), [])
 
     def test_directives_cannot_smuggle_or_omit_an_explanation(self) -> None:
         for comment in (
@@ -63,16 +43,119 @@ class SourceCommentPolicyTests(unittest.TestCase):
             "# noqa: E501 the URL cannot be split",
         ):
             with self.subTest(comment=comment):
-                self.assertEqual(_explanatory_comments(f"x = 1  {comment}\n"), [(1, comment)])
+                self.assertEqual(check_comments.explanatory_comments(f"x = 1  {comment}\n"), [(1, comment)])
 
     def test_a_shebang_after_the_first_line_is_a_comment(self) -> None:
-        self.assertEqual(_explanatory_comments("x = 1\n#!/usr/bin/env python\n"), [(2, "#!/usr/bin/env python")])
+        self.assertEqual(
+            check_comments.explanatory_comments("x = 1\n#!/usr/bin/env python\n"), [(2, "#!/usr/bin/env python")]
+        )
 
     def test_an_explanatory_comment_is_reported_with_its_line(self) -> None:
-        self.assertEqual(_explanatory_comments("x = 1\ny = 2  # explains why\n"), [(2, "# explains why")])
+        self.assertEqual(
+            check_comments.explanatory_comments("x = 1\ny = 2  # explains why\n"), [(2, "# explains why")]
+        )
 
     def test_a_hash_inside_a_string_is_not_a_comment(self) -> None:
-        self.assertEqual(_explanatory_comments('x = "# not a comment"\ny = f"{x}#also not"\n'), [])
+        self.assertEqual(check_comments.explanatory_comments('x = "# not a comment"\ny = f"{x}#also not"\n'), [])
+
+
+PUBLIC_AND_PRIVATE_DEFINITIONS = '''"""Module."""
+
+
+def public():
+    """Public."""
+
+    def nested():
+        """Nested."""
+
+
+def _private():
+    """Private."""
+
+
+class Public:
+    """Public class."""
+
+    def method(self):
+        """Public method."""
+
+    def __init__(self):
+        """Dunder."""
+
+    def _helper(self):
+        """Private method."""
+
+
+class _Private:
+    def method(self):
+        """Method of a private class."""
+'''
+
+
+class DocstringRuleTests(unittest.TestCase):
+    def test_only_public_api_of_the_typed_package_may_carry_docstrings(self) -> None:
+        found = check_comments.docstrings_outside_public_api(PUBLIC_AND_PRIVATE_DEFINITIONS, public_api_module=True)
+        self.assertEqual(
+            [name for _, name in found], ["public.nested", "_private", "Public._helper", "_Private.method"]
+        )
+
+    def test_modules_outside_the_typed_package_carry_no_docstrings_at_all(self) -> None:
+        found = check_comments.docstrings_outside_public_api(PUBLIC_AND_PRIVATE_DEFINITIONS, public_api_module=False)
+        self.assertEqual(
+            [name for _, name in found],
+            ["<module>", "public", "public.nested", "_private", "Public", "Public.method", "Public.__init__",
+             "Public._helper", "_Private.method"],
+        )
+
+    def test_public_api_modules_are_the_non_private_modules_of_the_typed_package(self) -> None:
+        self.assertTrue(check_comments.is_public_api_module(Path("src/jqqlib/fetch.py")))
+        self.assertTrue(check_comments.is_public_api_module(Path("src/jqqlib/__init__.py")))
+        self.assertFalse(check_comments.is_public_api_module(Path("src/jqqlib/_internal.py")))
+        self.assertFalse(check_comments.is_public_api_module(Path("scripts/dist_smoke.py")))
+
+
+class CommandLineTests(unittest.TestCase):
+    def _run(self, root: Path, *paths: Path) -> tuple[int, str]:
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            code = check_comments.main([str(path) for path in paths], root=root)
+        return code, stderr.getvalue()
+
+    def test_reports_each_violation_with_its_location_and_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            module = root / "src" / "jqqlib" / "bad.py"
+            module.parent.mkdir(parents=True)
+            module.write_text('def _helper():\n    """Explains."""\n    return 1  # because\n', encoding="utf-8")
+
+            code, stderr = self._run(root, module)
+
+        self.assertEqual(code, 1)
+        self.assertIn("src/jqqlib/bad.py:3: comment '# because'", stderr)
+        self.assertIn("src/jqqlib/bad.py:2: docstring on _helper", stderr)
+
+    def test_paths_outside_the_governed_trees_are_ignored(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            outside = root / "tests" / "test_anything.py"
+            outside.parent.mkdir(parents=True)
+            outside.write_text("x = 1  # a test may explain itself\n", encoding="utf-8")
+            readme = root / "README.md"
+            readme.write_text("# heading\n", encoding="utf-8")
+
+            self.assertEqual(self._run(root, outside, readme, root / "missing.py"), (0, ""))
+
+    def test_without_paths_the_whole_governed_trees_are_checked(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            script = root / "scripts" / "tool.py"
+            script.parent.mkdir(parents=True)
+            script.write_text('"""Usage text."""\n', encoding="utf-8")
+
+            code, stderr = self._run(root)
+
+        self.assertEqual(code, 1)
+        self.assertIn("scripts/tool.py:1: docstring on <module>", stderr)
 
 
 if __name__ == "__main__":

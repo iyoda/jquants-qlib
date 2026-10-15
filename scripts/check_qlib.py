@@ -17,10 +17,6 @@ def fields_for_provider(
     instruments: list[str],
     fields: list[str] | None = None,
 ) -> list[str]:
-    """Drop ``$factor`` when the sampled instruments have no factor binary.
-
-    Providers built with ``qlib.adjustment: none`` omit ``factor.day.bin``.
-    """
     selected = list(DEFAULT_FIELDS if fields is None else fields)
     if "$factor" not in selected or not instruments:
         return selected

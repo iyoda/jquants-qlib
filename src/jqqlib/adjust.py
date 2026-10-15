@@ -12,12 +12,8 @@ if TYPE_CHECKING:
 PRICE_FIELDS = ("open", "high", "low", "close")
 
 
-def _exclusive_reverse_cumprod(values: pd.Series, symbols: pd.Series) -> pd.Series:
-    """Per symbol, the product of the values on later rows (1.0 on the latest row).
-
-    ``values`` must be ordered by symbol, then date; the result keeps its index.
-    """
-    reversed_values = values.iloc[::-1]
+def _per_symbol_product_of_later_values(values_by_symbol_then_date: pd.Series, symbols: pd.Series) -> pd.Series:
+    reversed_values = values_by_symbol_then_date.iloc[::-1]
     reversed_symbols = symbols.iloc[::-1]
     products = reversed_values.groupby(reversed_symbols, sort=False).cumprod()
     return products.groupby(reversed_symbols, sort=False).shift(1, fill_value=1.0).iloc[::-1]
@@ -73,8 +69,8 @@ def apply_vendor_adjustment(
         return out
     ordered = _by_symbol_first_appearance_then_date(rows_with_symbol.reset_index(drop=True))
     float_factors = ordered["adjustment_factor"].astype("float64")
-    price_cum = _exclusive_reverse_cumprod(float_factors, ordered["symbol"])
-    volume_cum = _exclusive_reverse_cumprod(_volume_factors(ordered, float_factors), ordered["symbol"])
+    price_cum = _per_symbol_product_of_later_values(float_factors, ordered["symbol"])
+    volume_cum = _per_symbol_product_of_later_values(_volume_factors(ordered, float_factors), ordered["symbol"])
     for field in PRICE_FIELDS:
         ordered[field] = ordered[field] * price_cum
     ordered["volume"] = ordered["volume"] / volume_cum

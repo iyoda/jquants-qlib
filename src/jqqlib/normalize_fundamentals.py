@@ -23,12 +23,7 @@ _ASCII_DIGITS_RE = re.compile(r"[0-9]+")
 _DISC_TIME_RE = re.compile(r"([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?")
 
 
-def _disc_no_key(value: object) -> str | None:
-    """``DiscNo`` as a non-negative integer in digits without leading zeros, else None.
-
-    Accepts digit strings and integer-valued numbers (an integer column with a
-    missing value is read as float64), so "10", 10 and 10.0 give the same key.
-    """
+def _disc_no_canonical_digits(value: object) -> str | None:
     if value is None or isinstance(value, bool):
         return None
     if isinstance(value, numbers.Integral):
@@ -44,8 +39,7 @@ def _disc_no_key(value: object) -> str | None:
     return text.lstrip("0") or "0"
 
 
-def _disc_time_key(value: object) -> int | None:
-    """``DiscTime`` (``H:MM`` or ``HH:MM:SS``) as seconds after midnight, else None."""
+def _disc_time_seconds_after_midnight(value: object) -> int | None:
     if value is None:
         return None
     match = _DISC_TIME_RE.fullmatch(str(value).strip())
@@ -68,11 +62,13 @@ def _add_disclosure_order_keys(working: pd.DataFrame) -> list[str]:
     order = ["Code", "DiscDate"]
     if "DiscTime" in working.columns:
         working["_disc_time"] = pd.Series(
-            [_disc_time_key(value) for value in working["DiscTime"]], index=working.index, dtype="Int64"
+            [_disc_time_seconds_after_midnight(value) for value in working["DiscTime"]],
+            index=working.index,
+            dtype="Int64",
         )
         order.append("_disc_time")
     if "DiscNo" in working.columns:
-        disc_no = [_disc_no_key(value) for value in working["DiscNo"]]
+        disc_no = [_disc_no_canonical_digits(value) for value in working["DiscNo"]]
         working["_disc_no_digit_count"] = pd.Series(
             [None if key is None else len(key) for key in disc_no], index=working.index, dtype="Int64"
         )

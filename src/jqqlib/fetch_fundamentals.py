@@ -31,14 +31,7 @@ def _atomic_write_parquet(df: pd.DataFrame, path: Path) -> None:
     temp_path.replace(path)
 
 
-def _attempted_path_for(cache_path: Path) -> Path:
-    """Sidecar file next to ``cache_path`` recording every code that has been
-    QUERIED (whether or not it returned data). The raw-data cache alone cannot
-    serve as the "already handled" set: a code with no financial-summary
-    disclosures yet (e.g. an ETF/REIT/newly-listed code) legitimately returns
-    an empty response and would otherwise never appear in the data cache, so a
-    resumed run would re-query it forever instead of making forward progress
-    into codes it hasn't tried yet."""
+def _attempted_codes_sidecar_path(cache_path: Path) -> Path:
     return cache_path.with_name(cache_path.stem + "_attempted.json")
 
 
@@ -81,7 +74,7 @@ def fetch_fundamentals(
 
     ``cache_path``, when given, is read for already-QUERIED codes (skipped from
     this run's ``codes`` -- tracked via a sidecar "attempted" file, not just
-    the codes that happened to return data; see ``_attempted_path_for``) and
+    the codes that happened to return data; see ``_attempted_codes_sidecar_path``) and
     checkpointed every ``checkpoint_every`` newly queried codes plus once more
     at the end, so a killed/restarted run resumes from the last checkpoint
     instead of requerying everything (including codes with legitimately empty
@@ -94,7 +87,7 @@ def fetch_fundamentals(
     import pandas as pd
 
     cached_frames = _read_cache(cache_path) if cache_path is not None else []
-    attempted_path = _attempted_path_for(cache_path) if cache_path is not None else None
+    attempted_path = _attempted_codes_sidecar_path(cache_path) if cache_path is not None else None
     attempted = _read_attempted(attempted_path) if attempted_path is not None else set()
 
     todo = [str(code) for code in codes if str(code) not in attempted]

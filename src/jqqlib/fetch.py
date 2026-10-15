@@ -20,37 +20,17 @@ if TYPE_CHECKING:
 
 
 def _keychain_api_key_service() -> str:
-    """macOS Keychain generic-password service name for the API key.
-
-    Evaluated at call time so ``JQQLIB_KEYCHAIN_API_KEY_SERVICE`` set after
-    import still takes effect. Override the env var when sharing a Keychain
-    with tools that already use a different naming convention.
-    """
     return os.getenv("JQQLIB_KEYCHAIN_API_KEY_SERVICE", "jquants-api-key")
 
 
 def _keychain_refresh_token_service() -> str:
-    """macOS Keychain generic-password service name for the refresh token.
-
-    Evaluated at call time so ``JQQLIB_KEYCHAIN_REFRESH_TOKEN_SERVICE`` set
-    after import still takes effect.
-    """
     return os.getenv("JQQLIB_KEYCHAIN_REFRESH_TOKEN_SERVICE", "jquants-refresh-token")
 
 
 _ALLOW_YAML_CREDENTIALS_ENV = "JQQLIB_ALLOW_YAML_CREDENTIALS"
 
 
-def _read_keychain_secret(service: str) -> str | None:
-    """Read a secret VALUE from a macOS Keychain generic-password entry.
-
-    This deliberately passes ``-w`` because the caller needs the value itself
-    (an existence-only check must never pass ``-w``). The returned
-    value is the caller's responsibility: it must never be logged, printed,
-    or included in an exception/error message. Returns ``None`` (never an
-    empty string) when the entry is absent, empty, or ``security`` cannot be
-    run, so callers can fall through to the next credential source.
-    """
+def _read_keychain_secret_value_or_none(service: str) -> str | None:
     try:
         completed = subprocess.run(
             ["security", "find-generic-password", "-s", service, "-w"],
@@ -67,12 +47,6 @@ def _read_keychain_secret(service: str) -> str | None:
 
 
 def _refresh_token_client(refresh_token: str) -> Client:
-    """Build the legacy v1 (refresh-token) client.
-
-    ``jquantsapi.Client`` was removed from jquants-api-client 2.6; on such
-    versions only the API-key path (``ClientV2``) is available, so fail with an
-    actionable message instead of a bare ImportError.
-    """
     try:
         from jquantsapi import Client
     except ImportError as exc:
@@ -104,13 +78,13 @@ def create_jquants_client(config: dict) -> Client | ClientV2:
     if not isinstance(jq_conf, dict):
         jq_conf = {}
 
-    api_key = os.getenv("JQUANTS_API_KEY") or _read_keychain_secret(_keychain_api_key_service())
+    api_key = os.getenv("JQUANTS_API_KEY") or _read_keychain_secret_value_or_none(_keychain_api_key_service())
     if api_key:
         from jquantsapi import ClientV2
 
         return ClientV2(api_key=api_key)
 
-    refresh_token = os.getenv("JQUANTS_REFRESH_TOKEN") or _read_keychain_secret(
+    refresh_token = os.getenv("JQUANTS_REFRESH_TOKEN") or _read_keychain_secret_value_or_none(
         _keychain_refresh_token_service()
     )
     if refresh_token:
@@ -168,7 +142,6 @@ _TRANSIENT_STATUSES = frozenset({429, 500, 502, 503, 504})
 
 
 def _error_status(error: Exception) -> int | None:
-    """HTTP status attached to an API error (``status_code`` or ``response.status_code``), if any."""
     status = getattr(error, "status_code", None)
     if status is None:
         status = getattr(getattr(error, "response", None), "status_code", None)
@@ -176,13 +149,6 @@ def _error_status(error: Exception) -> int | None:
 
 
 def _is_transient_statusless(error: Exception) -> bool:
-    """True for status-less errors that look like a transient network blip.
-
-    Note: connection/timeout errors from requests subclass OSError and are
-    already handled by the typed check in ``_is_transient``;
-    this fuzzy message match only covers the residual status-less cases that
-    carry no usable type or status_code.
-    """
     return bool(_TRANSIENT_NETWORK_MESSAGE_RE.search(str(error)))
 
 

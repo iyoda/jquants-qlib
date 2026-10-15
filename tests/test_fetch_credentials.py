@@ -81,6 +81,27 @@ class CreateJquantsClientCredentialTests(unittest.TestCase):
 
         mock_client.assert_called_once_with(sentinel)
 
+    def test_empty_keychain_api_key_falls_through_to_the_refresh_token(self) -> None:
+        sentinel = "fixture-keychain-refresh-sentinel"
+
+        def _fake_run(argv, **kwargs):
+            if argv[3] == "jquants-refresh-token":
+                return _security_result(0, stdout=sentinel + "\n")
+            return _security_result(0, stdout="  \n")
+
+        with mock.patch("jqqlib.fetch.subprocess.run", side_effect=_fake_run), mock.patch(
+            "jqqlib.fetch._refresh_token_client"
+        ) as mock_client, mock.patch("jquantsapi.ClientV2") as mock_client_v2:
+            create_jquants_client({"jquants": {}})
+
+        mock_client_v2.assert_not_called()
+        mock_client.assert_called_once_with(sentinel)
+
+    def test_missing_security_command_is_no_credential_rather_than_a_crash(self) -> None:
+        with mock.patch("jqqlib.fetch.subprocess.run", side_effect=FileNotFoundError("security")):
+            with self.assertRaisesRegex(ValueError, "credential is not configured"):
+                create_jquants_client({"jquants": {}})
+
     def test_refresh_token_without_v1_client_raises_actionable_error(self) -> None:
         import builtins
 

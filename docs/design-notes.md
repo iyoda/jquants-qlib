@@ -2,7 +2,9 @@
 
 [README](../README.md) · [アーキテクチャ](architecture.md) · [運用](operations.md) · [財務](fundamentals.md)
 
-`src/jqqlib/` と `scripts/` には `#` コメントを書きません（`tests/test_source_comments.py` が検査します）。
+`src/jqqlib/` と `scripts/` には `#` コメントを書きません。docstring は、型付きパッケージ（`py.typed`）の
+公開 API、つまり `_` で始まらないモジュール・クラス・関数にだけ書きます。検査は `scripts/check_comments.py`
+が行い、unittest・CI・lefthook から同じものを呼びます。
 意図は関数・定数・変数の名前で表し、守るべき振る舞いはその理由を名前にしたテストで固定します。
 このページには、名前にもテストにも載せにくい背景（なぜその設計を選んだか、何を避けたか）を残します。
 各項目の「名前」「テスト」から実装と回帰テストを辿れます。
@@ -31,6 +33,29 @@
   「資格情報なし」を軽い no-op として扱えるようにし、無関係な import 失敗でそれが隠れないようにする。
 - テスト: `tests/test_fetch_credentials.py` の
   `test_missing_credentials_raise_value_error_without_importing_jquantsapi`
+
+### Keychain からの読み取り
+
+- 判断: `security find-generic-password` には `-w` を付けて値そのものを読む。値が空、項目が無い、
+  `security` を実行できない（Linux など）のいずれでも `None` を返し、次の資格情報源へ進む。
+- 理由: 呼び出し側が必要としているのは値なので `-w` が要る。存在確認だけの用途では `-w` を付けない。
+  読んだ値はログ・標準出力・例外メッセージのどこにも出してはならない。
+- 判断: Keychain の service 名（`JQQLIB_KEYCHAIN_API_KEY_SERVICE` /
+  `JQQLIB_KEYCHAIN_REFRESH_TOKEN_SERVICE`）は、import 時ではなく呼び出しのたびに環境変数から読む。
+- 理由: import 後に設定した環境変数も効くようにするため。別の命名規約を使うツールと Keychain を
+  共有する場合に上書きする。
+- 名前: `_read_keychain_secret_value_or_none`
+- テスト: `tests/test_fetch_credentials.py` の
+  `test_empty_keychain_api_key_falls_through_to_the_refresh_token`、
+  `test_missing_security_command_is_no_credential_rather_than_a_crash`、
+  `test_keychain_service_name_env_override_is_read_at_call_time`
+
+### 旧 refresh token クライアント
+
+`jquantsapi.Client`（v1 の refresh token 用クライアント）は jquants-api-client 2.6 で削除されました。
+そのバージョンでは API キー（`ClientV2`）しか使えないので、refresh token が見つかった場合は素の
+`ImportError` ではなく、`JQUANTS_API_KEY` を設定するよう促す `ValueError` にします。
+テスト: `tests/test_fetch_credentials.py` の `test_refresh_token_without_v1_client_raises_actionable_error`
 
 ### YAML 資格情報の抜け道
 
@@ -156,6 +181,19 @@
 - テスト: `tests/test_pipeline_daily.py` の `CliExitCodeTests`、
   `test_unavailable_calendar_exits_2_not_as_a_data_gap`、`tests/test_fundamentals_cli.py`
 
+### CLI のログ出力
+
+- 判断: `jqqlib` のロガーにハンドラを付けるのは `main()` の実行中だけ。INFO 以下は stdout、
+  WARNING 以上は stderr に出し、終わったら外す。ライブラリのコードからは `logging.basicConfig` を呼ばない。
+- 理由: ライブラリとして import した側には何も出さない（既定は無音）一方で、CLI では従来の `print()` と
+  同じく進捗を stdout、警告を stderr に出すため。
+- 名前: `_configure_cli_logging`、`_teardown_cli_logging`、`_BelowWarningFilter`
+- テスト: `tests/test_cli.py` の `test_run_daily_progress_goes_to_stdout_and_import_attaches_no_handler`、
+  `test_cli_logging_sends_warnings_to_stderr`
+
+`--as-of today` は Asia/Tokyo の現在日付です。現在時刻は `_now` から取り、テストはこれを差し替えて固定します
+（`tests/test_pipeline_daily.py` の `test_parse_as_of_date_today_is_asia_tokyo`）。
+
 ### 監査サイドカーの書き込み失敗
 
 - 判断: `last_audit.json` を書けなくても警告だけ出し、取り込みは失敗させない。
@@ -171,6 +209,22 @@
 - 名前: `read_committed_file_following_symlinks`
 - テスト: `tests/test_publish_check_git.py` の
   `test_no_op_reads_origin_manifest_through_committed_provider_symlink`
+- 判断: 作業ツリーの manifest のパスは、リポジトリのルートからの相対パスに直してから
+  `git show <ref>:<path>` に渡す。置き換えるのは、解決するとルートになる最も長い先頭部分だけにする。
+- 理由: `git show` はパスをカレントディレクトリではなくリポジトリのルートから解決するので、絶対パスの
+  `storage.qlib_dir` やサブディレクトリからの実行はそのままでは読めない。先頭だけを置き換えるので、
+  シンボリックリンク経由の絶対パス（macOS の `/var` → `/private/var`）も対応でき、リポジトリ内の
+  シンボリックリンク（publish 用の provider リンク）は git のパスに残って git 側で辿られる。
+- 名前: `_manifest_path_from_repo_root`
+- テスト: `tests/test_publish_check_git.py` の `test_absolute_qlib_dir_is_mapped_to_the_repo_path`、
+  `test_absolute_path_through_a_symlinked_parent_keeps_the_provider_symlink`、
+  `test_run_from_subdirectory_is_mapped_to_the_repo_path`
+- 判断: コミット済み manifest の読み取りは、「無い」（初回 publish、`None`）と「調べられない」
+  （git が無い、作業ツリーの外、存在しない ref、manifest が作業ツリーの外）を区別する。後者は例外にする。
+- 理由: 調べられないことを初回 publish と同じに扱うと、毎回「変更あり」と報告してしまうため。
+- 名前: `_committed_manifest`、`_CommittedManifestLookupFailed`
+- テスト: `tests/test_publish_check_git.py` の `test_unknown_git_ref_is_an_error_not_a_first_publish`、
+  `test_outside_a_git_work_tree_is_an_error`、`test_missing_git_binary_is_an_error`
 - 判断: Parquet のハッシュが同じでも、`adjustment_policy` が違えば「変更あり」とする。
 - 理由: `qlib.adjustment` を切り替えたり、係数の方針を変えたりすると、Qlib の dataset が変わるため。
 - 名前: `adjustment_policy_changed`
@@ -199,6 +253,10 @@
 
 - 生の取得結果のキャッシュ（`DEFAULT_RAW_CACHE_FILENAME`）は、強制終了や再起動の後に取得を
   再開できるようにするためのもの。既に API 呼び出しを費やした銘柄を取り直さずに済む。
+- 試行済みの銘柄は、データのキャッシュとは別のファイル（`_attempted_codes_sidecar_path`）に記録する。
+  まだ財務の開示が無い銘柄（ETF、REIT、新規上場など）は正当に空の応答を返し、データのキャッシュには
+  現れない。データのキャッシュだけを「処理済み」とみなすと、再開のたびにその銘柄を問い合わせ続け、
+  まだ試していない銘柄へ進めなくなる。
 - 銘柄を「試行済み」とするのは、API 呼び出しが戻った後（データありか、正当な空の結果）だけ。
   例外で終わった呼び出しは結果が分からない状態なので、次回の実行で再試行の対象に残す。
 - `Code` 列は、API 応答が返す値に関係なく、要求した銘柄コードで上書きする。結合キーを揃えるためで、
@@ -223,6 +281,8 @@
 - 並べ替えは辞書式で、欠けているか使えないキーの値は、それより前のキーが同じ行どうしの中で先頭に並ぶ。
   各項目は最後の null でない値を採るので、たとえば時刻が同じなら `DiscNo` のある行が `DiscNo` のない行より
   優先される。一方、時刻が遅い行は `DiscNo` が欠けていても、時刻が早い行より優先される。
+- `DiscNo` は先頭のゼロを除いた数字列に正規化する（`_disc_no_canonical_digits`）。数字の文字列と
+  整数値の数（欠損を含む整数列は float64 で読まれる）を受け付けるので、`"10"`、`10`、`10.0` は同じになる。
 - `DiscNo` の数字判定は ASCII の `[0-9]` だけにする。`\d` は他の Unicode 数字にも一致し、
   `lstrip("0")` と桁数比較では正しく並ばないため（`_ASCII_DIGITS_RE`）。
 - 同じ日の開示は項目ごとにマージする（`GroupBy.last` は null を飛ばす）。業績予想の修正が、
@@ -234,9 +294,20 @@
 
 ## スクリプト（`scripts/`）
 
-- `check_qlib.py`: Qlib には JP のリージョン定数が無いため、US 以外の既定である `REG_CN` を
-  `QLIB_NON_US_REGION_FOR_JP_DATA` として使う。
+- `check_comments.py`: このページ冒頭の規約を検査する。渡されたパスのうち `src/jqqlib` と `scripts`
+  の外にあるものは無視するので、lefthook がステージしたファイルの一覧をそのまま渡せる。
+- `check_qlib.py`
+  - Qlib には JP のリージョン定数が無いため、US 以外の既定である `REG_CN` を
+    `QLIB_NON_US_REGION_FOR_JP_DATA` として使う。
+  - `qlib.adjustment: none` で作った provider には `factor.day.bin` が無いので、調べた銘柄に factor の
+    bin が無ければ `$factor` を読み取り対象から外す（`fields_for_provider`）。
 - `dist_smoke.py`
+  - リポジトリの外から、`PYTHONPATH` をチェックアウトに向けずに実行する（手順は
+    [リリース手順](releasing.md)）。`jqqlib` がインストール済みの wheel から解決されることを確かめるため。
+    wheel には `tests/` が入らないので、CI が通るのは CSV のインライン・フォールバックの経路で、
+    `tests.support.synthetic` は unittest 側で確かめる。
+  - CLI は `python -m jqqlib.pipeline` ではなく、実行中のインタープリタの隣にある `jqqlib` console script
+    で動かす（`installed_jqqlib_console_script`）。pip の利用者が使うエントリポイントを検査するため。
   - インストール済みの wheel だけで動かすときの CSV フォールバック（`write_inline_csv`）は、
     `tests.support.synthetic` と同じ列の約束と形で、価格だけを固定値にしたもの。
   - `init-config` の確認は、設定例がチェックアウトだけでなく wheel（package-data）に同梱されて
