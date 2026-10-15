@@ -47,6 +47,13 @@ def write_parquet(
     *,
     require_adjustment_factor: bool = False,
 ) -> Path:
+    """Normalize fetched quotes and write them to ``daily_quotes.parquet`` in ``parquet_dir``; return its path.
+
+    ``merge_mode="upsert"`` merges with the existing file, the new row winning per ``symbol`` and ``date``. Rows are
+    sorted so identical content gives identical bytes, and the Qlib readiness checks run before the atomic
+    replace. Raises ``NoDataFetchedError`` for an empty frame and ``RuntimeError``, leaving the file unchanged,
+    when the data is not Qlib-ready.
+    """
     import pandas as pd
 
     parquet_dir.mkdir(parents=True, exist_ok=True)
@@ -101,6 +108,11 @@ def csv_to_parquet(csv_path: Path, parquet_dir: Path, *, require_adjustment_fact
 
 
 def write_bootstrap_csv(df: pd.DataFrame, output_path: Path) -> Path:
+    """Write fetched quotes as a bootstrap CSV; return its path.
+
+    The required columns come first, then any vendor-adjusted columns present, one row per ``Code`` and ``Date``.
+    Raises ``NoDataFetchedError`` for an empty frame and ``ValueError`` when a required column is missing.
+    """
     import pandas as pd
 
     normalized_df = normalize_daily_quote_columns(df)

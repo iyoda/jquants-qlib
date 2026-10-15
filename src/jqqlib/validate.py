@@ -15,6 +15,7 @@ OHLCV_FIELDS = ["open", "high", "low", "close", "volume"]
 
 
 def validate_date_range(start_date: dt.date, end_date: dt.date) -> None:
+    """Raise ``ValueError`` when ``start_date`` is after ``end_date``."""
     if start_date > end_date:
         raise ValueError(f"Invalid date range: start ({start_date}) must be <= end ({end_date}).")
 

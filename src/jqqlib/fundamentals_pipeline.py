@@ -118,10 +118,16 @@ def run_fundamentals_etl(
 
 
 def parse_config_path(v: str) -> Path:
+    """Argparse type for ``--config``: the argument as a ``Path``."""
     return Path(v)
 
 
 def main() -> None:
+    """Entry point of ``python -m jqqlib.fundamentals_pipeline``.
+
+    Errors are printed as one ``error: <message>`` line on stderr instead of a traceback. A PIT audit failure exits
+    1; other errors exit with ``jqqlib.pipeline.cli_error_exit_code`` (2 = user error, 1 = failed run).
+    """
     parser = argparse.ArgumentParser(
         prog="python -m jqqlib.fundamentals_pipeline",
         description="J-Quants fundamentals (as-of PIT panel) pipeline",

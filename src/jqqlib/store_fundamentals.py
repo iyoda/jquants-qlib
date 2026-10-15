@@ -27,6 +27,7 @@ def write_fundamentals_parquet(panel: pd.DataFrame, parquet_dir: Path) -> Path:
 
 
 def write_pit_audit_report(audit: dict[str, Any], parquet_dir: Path) -> Path:
+    """Atomically write the PIT audit report as JSON into ``parquet_dir``; return its path."""
     parquet_dir.mkdir(parents=True, exist_ok=True)
     output_path = parquet_dir / DEFAULT_PIT_AUDIT_FILENAME
     temp_output = output_path.with_suffix(output_path.suffix + ".tmp")

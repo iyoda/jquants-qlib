@@ -2,9 +2,11 @@
 
 [README](../README.md) · [アーキテクチャ](architecture.md) · [運用](operations.md) · [財務](fundamentals.md)
 
-`src/jqqlib/` と `scripts/` には `#` コメントを書きません。docstring は、型付きパッケージ（`py.typed`）の
-公開 API、つまり `_` で始まらないモジュール・クラス・関数にだけ書きます。検査は `scripts/check_comments.py`
-が行い、unittest・CI・lefthook から同じものを呼びます。
+`src/jqqlib/` と `scripts/` の Python ファイル（`*.py`）には `#` コメントを書きません。同じディレクトリでも
+`scripts/run_daily.sh` のような Python 以外のファイルは対象外です。docstring は、型付きパッケージ（`py.typed`）の
+公開 API、つまり `src/jqqlib` の `_` で始まらないモジュール・クラス・関数にだけ書き、そこでは必須です。
+コメントと docstring の置き場所は `scripts/check_comments.py` が検査し、unittest・CI・lefthook から同じものを
+呼びます。公開 API の docstring の有無は ruff の `D1` 規則（`src/jqqlib` だけに適用）が検査します。
 意図は関数・定数・変数の名前で表し、守るべき振る舞いはその理由を名前にしたテストで固定します。
 このページには、名前にもテストにも載せにくい背景（なぜその設計を選んだか、何を避けたか）を残します。
 各項目の「名前」「テスト」から実装と回帰テストを辿れます。

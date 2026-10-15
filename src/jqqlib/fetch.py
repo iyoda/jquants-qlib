@@ -211,6 +211,10 @@ def call_jquants_with_retry(
 
 
 def iter_date_chunks(start: dt.date, end: dt.date, days: int) -> Iterable[tuple[dt.date, dt.date]]:
+    """Yield inclusive ``(chunk_start, chunk_end)`` windows of at most ``days`` days from ``start`` to ``end``.
+
+    Raises ``ValueError`` when ``days`` is below 1.
+    """
     if days < 1:
         raise ValueError(f"days must be 1 or greater, got {days}.")
 
@@ -236,6 +240,7 @@ class _RequestPacer:
 
 
 def iter_month_starts(start_date: dt.date, end_date: dt.date) -> Iterable[dt.date]:
+    """Yield the first day of every month that overlaps ``start_date`` to ``end_date``."""
     cursor = dt.date(start_date.year, start_date.month, 1)
     while cursor <= end_date:
         yield cursor
@@ -258,6 +263,14 @@ def fetch_daily_quotes(
     request_interval_sec: float = 0.0,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> pd.DataFrame:
+    """Fetch daily quotes from ``start_date`` to ``end_date`` in windows of ``chunk_days`` days.
+
+    With ``codes`` there is one request per code and window, otherwise one request per window for all codes.
+    ``ClientV2`` uses ``get_eq_bars_daily`` and, when an all-codes window is rejected with HTTP 400, requests that
+    window one day at a time; the legacy client uses ``get_prices_daily_quotes``. Every request goes through
+    ``call_jquants_with_retry`` and is spaced by ``request_interval_sec``. Returns the raw J-Quants columns with a
+    timezone-naive ``Date``, or an empty frame when nothing was returned.
+    """
     import pandas as pd
 
     frames: list[pd.DataFrame] = []
@@ -364,6 +377,11 @@ def fetch_bulk_daily_quotes(
     request_interval_sec: float = 0.0,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> pd.DataFrame:
+    """Download the monthly bulk daily-quote files that overlap ``start_date`` to ``end_date``.
+
+    Returns the rows inside the range with a timezone-naive ``Date``. Raises ``ValueError`` when J-Quants lists no
+    bulk files or none covers the requested months; the message names the available month range.
+    """
     import pandas as pd
     from jquantsapi import BulkEndpoint
 

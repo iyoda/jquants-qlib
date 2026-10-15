@@ -72,7 +72,11 @@ line-length = 120
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP", "ERA001", "PGH003", "PGH004", "RUF100"]
+select = ["E", "F", "I", "B", "UP", "D1", "ERA001", "PGH003", "PGH004", "RUF100"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/**" = ["D1"]
+"tests/**" = ["D1"]
 
 [tool.mypy]
 # mypy checks all of `src/jqqlib`; `scripts/` and `tests/` are not yet type-checked.

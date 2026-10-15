@@ -96,8 +96,9 @@ def violations(paths: Iterable[Path], *, root: Path = REPO_ROOT) -> list[str]:
 def main(argv: Sequence[str] | None = None, *, root: Path = REPO_ROOT) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Fail on explanatory comments in src/jqqlib and scripts, and on docstrings outside the public API "
-            "of the typed package. Other paths are ignored, so staged-file lists can be passed as is."
+            "Fail on explanatory comments in the Python files under src/jqqlib and scripts, and on docstrings "
+            "outside the public API of the typed package. Other paths are ignored, so staged-file lists can be "
+            "passed as is."
         )
     )
     parser.add_argument("paths", nargs="*", type=Path, help="files or directories (default: src/jqqlib scripts)")

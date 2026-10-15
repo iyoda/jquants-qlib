@@ -81,6 +81,11 @@ def _coerce_float(etl_conf: dict[str, Any], key: str, default: float) -> float:
 
 
 def validate_etl_config(config: dict) -> dict[str, Any]:
+    """Return the ``etl`` settings with their defaults applied.
+
+    Raises ``ValueError`` for a non-mapping section, a non-numeric or negative value, ``chunk_days`` below 1,
+    ``retry_max_delay_sec`` below ``retry_base_delay_sec``, or an unknown ``merge_mode``.
+    """
     if not isinstance(config, dict):
         raise ValueError("configuration must be a mapping.")
     etl_conf = config.get("etl", {})
@@ -137,6 +142,7 @@ def _csv_source(csv_path: Path) -> dict[str, Any]:
 
 
 def run_etl(config_path: Path, start_date: dt.date, end_date: dt.date) -> Path:
+    """Fetch daily quotes of the configured universe and write them to the Parquet; return its path."""
     validate_date_range(start_date, end_date)
 
     config = load_config(config_path)
@@ -166,6 +172,10 @@ def run_etl(config_path: Path, start_date: dt.date, end_date: dt.date) -> Path:
 
 
 def run_bootstrap_csv(config_path: Path, csv_path: Path) -> Path:
+    """Load a bootstrap CSV into the Parquet, dump the Qlib provider and write the dataset artifacts.
+
+    Returns ``storage.qlib_dir``.
+    """
     config = load_config(config_path)
     parquet_dir = Path(config["storage"]["parquet_dir"])
     qlib_dir = Path(config["storage"]["qlib_dir"])
@@ -187,6 +197,10 @@ def download_bootstrap_csv(
     end_date: dt.date,
     output_path: Path,
 ) -> Path:
+    """Download bulk daily quotes into a bootstrap CSV and write its source manifest; return the CSV path.
+
+    Requires API-key authentication (``ClientV2``); raises ``ValueError`` otherwise.
+    """
     validate_date_range(start_date, end_date)
 
     config = load_config(config_path)
@@ -216,6 +230,7 @@ def download_bootstrap_csv(
 
 
 def run_all(config_path: Path, start_date: dt.date, end_date: dt.date) -> None:
+    """Run ``run_etl`` for the range, then dump the Qlib provider and write the dataset artifacts."""
     config = load_config(config_path)
     qlib_dir = Path(config["storage"]["qlib_dir"])
     codes = config.get("universe", {}).get("codes", [])
@@ -246,6 +261,7 @@ def run_incremental(config_path: Path, start_date: dt.date, end_date: dt.date) -
 
 
 def read_existing_dataset_end(config_path: Path) -> dt.date | None:
+    """Return the last date in the configured Parquet, or ``None`` when it is missing or empty."""
     import pandas as pd
 
     config = load_config(config_path)
@@ -261,6 +277,10 @@ def read_existing_dataset_end(config_path: Path) -> dt.date | None:
 
 
 def catch_up_start_date(existing_dataset_end: dt.date | None, target_date: dt.date) -> dt.date:
+    """Return the day after ``existing_dataset_end``.
+
+    Returns ``target_date`` when there is no dataset yet or it already reaches ``target_date``.
+    """
     if existing_dataset_end is None or existing_dataset_end >= target_date:
         return target_date
     return existing_dataset_end + dt.timedelta(days=1)
@@ -292,6 +312,12 @@ def run_daily(
     runner: RunAllCallable = run_incremental,
     dataset_end_reader: DatasetEndReader = read_existing_dataset_end,
 ) -> dt.date:
+    """Import the most recent XTKS session that has data, catching up from the dataset end; return that session.
+
+    Sessions are tried from ``as_of`` backwards, at most ``max_lookback_business_days`` back, while a fetch returns
+    no data. Raises ``NoDataFetchedError`` when none has data and ``ExactCalendarRequired`` when the XTKS calendar
+    is unavailable.
+    """
     last_no_data: NoDataFetchedError | None = None
     existing_dataset_end = dataset_end_reader(config_path)
 
@@ -337,6 +363,11 @@ def run_audit(
     window_business_days: int | None = None,
     max_lookback_business_days: int = 10,
 ) -> GapAuditResult:
+    """Audit the configured Parquet for missing recent XTKS sessions.
+
+    Without ``window_business_days`` the window is ``etl.audit_window_business_days`` (default 5), which must not
+    exceed ``max_lookback_business_days``.
+    """
     config = load_config(config_path)
     parquet_path = Path(config["storage"]["parquet_dir"]) / DEFAULT_PARQUET_FILENAME
     if window_business_days is None:
@@ -362,6 +393,12 @@ def decide_publish(current_hash: str | None, committed_hash: str | None) -> bool
 
 @dataclass(frozen=True)
 class PublishCheckDecision:
+    """Outcome of ``publish-check``.
+
+    ``returncode`` is 0 when the dataset changed, 3 when it is unchanged and 1 on an error; ``reason`` and the
+    remaining fields explain the decision.
+    """
+
     returncode: int
     reason: str
     current_hash: str | None = None
@@ -498,6 +535,11 @@ def _publish_check_error(
 
 
 def evaluate_publish_check(config_path: Path) -> PublishCheckDecision:
+    """Compare the working-tree dataset manifest with the one committed on ``publish_check.git_ref``.
+
+    Fails closed with ``returncode`` 1 when the manifest or the quality report is missing or invalid, either
+    reports a ``fail`` status, they disagree, or the committed manifest cannot be looked up.
+    """
     config = load_config(config_path)
 
     manifest, reason = _read_json_object(_manifest_path(config), "dataset manifest")
@@ -607,6 +649,7 @@ def publish_pathspecs(config_path: Path) -> list[str]:
 
 
 def parse_date(v: str) -> dt.date:
+    """Argparse type: parse a ``YYYY-MM-DD`` date."""
     return dt.datetime.strptime(v, "%Y-%m-%d").date()
 
 
@@ -615,6 +658,7 @@ def _now(tz: dt.tzinfo) -> dt.datetime:
 
 
 def parse_as_of_date(v: str) -> dt.date:
+    """Argparse type for ``--as-of``: ``today`` is the current date in Asia/Tokyo, otherwise ``YYYY-MM-DD``."""
     if v == "today":
         return _now(ZoneInfo("Asia/Tokyo")).date()
     return parse_date(v)
@@ -649,6 +693,7 @@ def _accept_audit_only_flags_forwarded_by_the_daily_wrapper(run_daily_parser: ar
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the ``jqqlib`` command-line parser."""
     parser = argparse.ArgumentParser(prog="jqqlib", description="J-Quants to Qlib dataset pipeline")
     parser.add_argument("--version", action="version", version=f"jqqlib {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -805,6 +850,11 @@ def _is_run_failure_from_an_already_imported_library(exc: BaseException) -> bool
 
 
 def main() -> None:
+    """Entry point of the ``jqqlib`` console script.
+
+    Errors are printed as one ``error: <message>`` line on stderr instead of a traceback; the exit code comes from
+    ``cli_error_exit_code`` (2 = user error, 1 = failed run).
+    """
     args = build_parser().parse_args()
     _configure_cli_logging()
     try:

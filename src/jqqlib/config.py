@@ -12,6 +12,10 @@ DEFAULT_PUBLISH_CHECK_GIT_REF = "origin/main"
 
 
 def qlib_adjustment(config: dict) -> str:
+    """Return the validated ``qlib.adjustment``, ``vendor_factor`` when unset.
+
+    Raises ``ValueError`` when ``qlib`` is not a mapping or the value is neither ``vendor_factor`` nor ``none``.
+    """
     qlib = config.get("qlib", {})
     if qlib is None:
         qlib = {}
@@ -27,6 +31,12 @@ def qlib_adjustment(config: dict) -> str:
 
 
 def load_config(path: Path) -> dict:
+    """Load and validate a YAML configuration file.
+
+    ``storage.parquet_dir`` and ``storage.qlib_dir`` are required; ``storage.audit_dir``, ``qlib.adjustment`` and
+    ``publish_check.git_ref`` get their defaults. Relative storage paths stay relative to the working directory.
+    Raises ``ValueError`` for invalid YAML, a non-mapping section or an invalid value.
+    """
     import yaml
 
     with path.open("r", encoding="utf-8") as f:
