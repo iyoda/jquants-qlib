@@ -68,13 +68,13 @@ def docstrings_outside_public_api(source: str, *, public_api_module: bool) -> li
 
 
 def governed_python_files(paths: Iterable[Path], *, root: Path) -> list[Path]:
-    governed_roots = [root / governed for governed in COMMENT_FREE_ROOTS]
+    governed_roots = [(root / governed).resolve() for governed in COMMENT_FREE_ROOTS]
     files: set[Path] = set()
     for path in paths:
         absolute = (path if path.is_absolute() else Path.cwd() / path).resolve()
         candidates = sorted(absolute.rglob("*.py")) if absolute.is_dir() else [absolute]
-        for candidate in candidates:
-            is_governed = any(candidate.is_relative_to(governed.resolve()) for governed in governed_roots)
+        for candidate in (found.resolve() for found in candidates):
+            is_governed = any(candidate.is_relative_to(governed) for governed in governed_roots)
             if candidate.suffix == ".py" and candidate.is_file() and is_governed:
                 files.add(candidate)
     return sorted(files)
@@ -85,11 +85,18 @@ def violations(paths: Iterable[Path], *, root: Path = REPO_ROOT) -> list[str]:
     found = []
     for path in governed_python_files(paths, root=resolved_root):
         relative = path.relative_to(resolved_root)
-        source = path.read_text(encoding="utf-8")
-        for line, comment in explanatory_comments(source):
-            found.append(f"{relative}:{line}: comment {comment!r}")
-        for line, name in docstrings_outside_public_api(source, public_api_module=is_public_api_module(relative)):
-            found.append(f"{relative}:{line}: docstring on {name}, which is not public API of the typed package")
+        try:
+            source = path.read_text(encoding="utf-8")
+            comments = explanatory_comments(source)
+            docstrings = docstrings_outside_public_api(source, public_api_module=is_public_api_module(relative))
+        except (UnicodeDecodeError, SyntaxError, tokenize.TokenError) as exc:
+            found.append(f"{relative}: cannot be checked: {type(exc).__name__}: {exc}")
+            continue
+        found.extend(f"{relative}:{line}: comment {comment!r}" for line, comment in comments)
+        found.extend(
+            f"{relative}:{line}: docstring on {name}, which is not public API of the typed package"
+            for line, name in docstrings
+        )
     return found
 
 
