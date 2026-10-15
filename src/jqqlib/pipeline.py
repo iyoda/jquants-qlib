@@ -313,13 +313,13 @@ def run_daily(
     runner: RunAllCallable = run_incremental,
     dataset_end_reader: DatasetEndReader = read_existing_dataset_end,
 ) -> dt.date:
-    """Import up to the latest XTKS session that has data; return that session.
+    """Import up to the latest XTKS session whose range has data; return that session, the end of the import.
 
     The range starts the day after the dataset end, or at the session itself when there is no dataset yet or the
-    dataset already reaches it. ``runner`` gets the whole range at once and succeeds when any day in it has data.
-    Only when the whole range is empty is the next earlier session tried, up to ``max_lookback_business_days``
-    back. Raises ``NoDataFetchedError`` when every range is empty and ``ExactCalendarRequired`` when the XTKS
-    calendar is unavailable.
+    dataset already reaches it. ``runner`` gets the whole range at once and succeeds when any day in it has data,
+    even if the returned session itself has none. Only when the whole range is empty is the next earlier session
+    tried, up to ``max_lookback_business_days`` back. Raises ``NoDataFetchedError`` when every range is empty and
+    ``ExactCalendarRequired`` when the XTKS calendar is unavailable.
     """
     last_no_data: NoDataFetchedError | None = None
     existing_dataset_end = dataset_end_reader(config_path)

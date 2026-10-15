@@ -12,7 +12,7 @@ DEFAULT_PUBLISH_CHECK_GIT_REF = "origin/main"
 
 
 def qlib_adjustment(config: dict) -> str:
-    """Return the validated ``qlib.adjustment``, ``vendor_factor`` when unset.
+    """Return the validated ``qlib.adjustment``, ``vendor_factor`` when it or the ``qlib`` section is unset or null.
 
     Raises ``ValueError`` when ``qlib`` is not a mapping or the value is neither ``vendor_factor`` nor ``none``, and
     ``TypeError`` when the value is unhashable, such as a list.
