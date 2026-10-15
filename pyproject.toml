@@ -71,11 +71,13 @@ line-length = 120
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP"]
+select = ["E", "F", "I", "B", "UP", "ERA001", "PGH003", "PGH004", "RUF100"]
 
 [tool.mypy]
 # mypy checks all of `src/jqqlib`; `scripts/` and `tests/` are not yet type-checked.
 files = ["src/jqqlib"]
+enable_error_code = ["ignore-without-code"]
+warn_unused_ignores = true
 # `python_version = "3.10"` is not usable here: current numpy stubs use 3.12-only syntax.
 # The CI test matrix (3.10-3.12) is the guard against 3.11+-only stdlib APIs such as datetime.UTC.
 
