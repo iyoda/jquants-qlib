@@ -1,15 +1,3 @@
-"""Check an installed distribution; invoke from outside the repository.
-
-Run WITHOUT ``PYTHONPATH`` pointing at the checkout: ``jqqlib`` must resolve from
-the installed wheel, and the wheel does not ship ``tests/``, so the CSV fixture
-below is the inline fallback. That fallback is the path CI exercises; the richer
-``tests.support.synthetic`` helper is covered by the unittest suite instead.
-
-The CLI is driven through the ``jqqlib`` console script installed next to the
-running interpreter, not ``python -m jqqlib.pipeline``, so the entry point that
-pip users get is the one under test.
-"""
-
 import csv
 import datetime as dt
 import importlib.metadata
@@ -31,10 +19,10 @@ from jqqlib.normalize import BOOTSTRAP_CSV_COLUMNS
 
 SMOKE_SYMBOLS = ["10010", "10020"]
 SMOKE_START, SMOKE_END = "2026-06-01", "2026-06-05"
+QLIB_BIN_LITTLE_ENDIAN_FLOAT32 = "<f"
 
 
-def console_script() -> str:
-    """Locate the ``jqqlib`` console script of the interpreter running this smoke."""
+def installed_jqqlib_console_script() -> str:
     candidate = Path(sys.executable).parent / "jqqlib"
     if candidate.is_file():
         return str(candidate)
@@ -44,7 +32,7 @@ def console_script() -> str:
     return found
 
 
-JQQLIB = console_script()
+JQQLIB = installed_jqqlib_console_script()
 
 
 def run_cli(*arguments: str) -> subprocess.CompletedProcess[str]:
@@ -72,7 +60,6 @@ def smoke_dates() -> list[str]:
 
 
 def write_inline_csv(path: Path) -> Path:
-    # Same column contract and shape as tests.support.synthetic, with fixed prices.
     with path.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=[*BOOTSTRAP_CSV_COLUMNS, "AdjustmentFactor"], lineterminator="\n")
         writer.writeheader()
@@ -103,8 +90,12 @@ def write_smoke_csv(path: Path) -> Path:
     )
 
 
+def read_qlib_bin_values(path: Path) -> np.ndarray:
+    start_index_then_values = np.fromfile(path, dtype=QLIB_BIN_LITTLE_ENDIAN_FLOAT32)
+    return start_index_then_values[1:]
+
+
 def check_init_config(root: Path) -> None:
-    # The packaged example config must ship in the wheel (package-data), not only in the checkout.
     target = root / "config.example.written.yaml"
     run_cli("init-config", str(target))
     document = yaml.safe_load(target.read_text(encoding="utf-8"))
@@ -153,12 +144,10 @@ def check_conversion(root: Path) -> None:
         factor_bin = feature_dir / "factor.day.bin"
         if not factor_bin.is_file() or factor_bin.stat().st_size <= 4:
             raise RuntimeError(f"Qlib $factor bin missing or empty for {code}: {factor_bin}")
-        # Qlib bins are little-endian float32: [start_index, ...field values]. $factor is 1.0
-        # on each symbol's latest date for the default vendor_factor dump.
-        series = np.fromfile(factor_bin, dtype="<f")
-        if series.size < 2:
+        factor_values = read_qlib_bin_values(factor_bin)
+        if factor_values.size == 0:
             raise RuntimeError(f"Qlib $factor bin for {code} has no values")
-        last = float(series[-1])
+        last = float(factor_values[-1])
         if abs(last - 1.0) > 1e-6:
             raise RuntimeError(f"$factor on last date for {code} is {last!r}, expected 1.0")
         factor_last[code] = last

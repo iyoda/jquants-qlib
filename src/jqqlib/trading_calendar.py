@@ -17,6 +17,9 @@ class ExactCalendarRequired(RuntimeError):
     """Raised when the authoritative XTKS calendar dependency is unavailable."""
 
 
+_OUT_OF_PRECOMPUTED_RANGE_ERROR_NAME = "DateOutOfBounds"
+
+
 def _xtks_calendar():
     try:
         import exchange_calendars as xc
@@ -33,9 +36,7 @@ def is_session(day: dt.date) -> bool:
     try:
         return bool(cal.is_session(day.isoformat()))
     except Exception as exc:
-        # exchange_calendars raises DateOutOfBounds outside its precomputed
-        # range. Treat that as "calendar cannot answer", never as a guess.
-        if exc.__class__.__name__ != "DateOutOfBounds":
+        if exc.__class__.__name__ != _OUT_OF_PRECOMPUTED_RANGE_ERROR_NAME:
             raise
         raise ExactCalendarRequired(
             f"XTKS calendar has no session data for {day.isoformat()}"

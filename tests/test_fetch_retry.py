@@ -140,6 +140,19 @@ class CallWithRetryTests(unittest.TestCase):
             _retry(api_call)
         self.assertEqual(attempts["n"], 1)
 
+    def test_status_less_auth_failure_message_is_not_mistaken_for_a_network_blip(self) -> None:
+        for message in ("401 Unauthorized", "403 Forbidden", "invalid api key"):
+            with self.subTest(message=message):
+                attempts = {"n": 0}
+
+                def api_call(message: str = message, attempts: dict[str, int] = attempts):
+                    attempts["n"] += 1
+                    raise Exception(message)
+
+                with self.assertRaisesRegex(Exception, message):
+                    _retry(api_call)
+                self.assertEqual(attempts["n"], 1)
+
     def test_status_less_retry_can_be_disabled(self) -> None:
         attempts = {"n": 0}
 

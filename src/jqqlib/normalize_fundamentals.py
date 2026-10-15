@@ -11,9 +11,6 @@ if TYPE_CHECKING:
     import pandas as pd
 
 
-# Numeric fundamental fields to carry (V2 /fins/summary columns). The set was
-# validated against a real pull (483/500 universe codes, pit_violations == 0)
-# before being fixed here.
 CARRY_NUM = [
     "NP", "FNP", "NxFNP", "Eq", "EPS", "DEPS", "FEPS", "BPS",
     "Sales", "OP", "TA", "CFO", "ShOutFY", "TrShFY", "AvgSh",
@@ -22,18 +19,11 @@ CARRY_STR = ["CurPerType"]
 
 SRC_DISC_DATE_COLUMN = "_src_DiscDate"
 
-# ASCII digits only: ``\d`` also matches other Unicode digits, which lstrip("0")
-# and the digit-count comparison below would not order correctly.
-_DIGITS_RE = re.compile(r"[0-9]+")
+_ASCII_DIGITS_RE = re.compile(r"[0-9]+")
 _DISC_TIME_RE = re.compile(r"([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?")
 
 
-def _disc_no_key(value: object) -> str | None:
-    """``DiscNo`` as a non-negative integer in digits without leading zeros, else None.
-
-    Accepts digit strings and integer-valued numbers (an integer column with a
-    missing value is read as float64), so "10", 10 and 10.0 give the same key.
-    """
+def _disc_no_canonical_digits(value: object) -> str | None:
     if value is None or isinstance(value, bool):
         return None
     if isinstance(value, numbers.Integral):
@@ -44,13 +34,12 @@ def _disc_no_key(value: object) -> str | None:
             return str(int(number))
         return None
     text = str(value).strip()
-    if not _DIGITS_RE.fullmatch(text):
+    if not _ASCII_DIGITS_RE.fullmatch(text):
         return None
     return text.lstrip("0") or "0"
 
 
-def _disc_time_key(value: object) -> int | None:
-    """``DiscTime`` (``H:MM`` or ``HH:MM:SS``) as seconds after midnight, else None."""
+def _disc_time_seconds_after_midnight(value: object) -> int | None:
     if value is None:
         return None
     match = _DISC_TIME_RE.fullmatch(str(value).strip())
@@ -60,6 +49,32 @@ def _disc_time_key(value: object) -> int | None:
     if minutes > 59 or seconds > 59:
         return None
     return hours * 3600 + minutes * 60 + seconds
+
+
+def _blank_strings_as_null(values: pd.Series) -> pd.Series:
+    blank = (values.astype("string").str.strip() == "").fillna(False)
+    return values.mask(blank)
+
+
+def _add_disclosure_order_keys(working: pd.DataFrame) -> list[str]:
+    import pandas as pd
+
+    order = ["Code", "DiscDate"]
+    if "DiscTime" in working.columns:
+        working["_disc_time"] = pd.Series(
+            [_disc_time_seconds_after_midnight(value) for value in working["DiscTime"]],
+            index=working.index,
+            dtype="Int64",
+        )
+        order.append("_disc_time")
+    if "DiscNo" in working.columns:
+        disc_no = [_disc_no_canonical_digits(value) for value in working["DiscNo"]]
+        working["_disc_no_digit_count"] = pd.Series(
+            [None if key is None else len(key) for key in disc_no], index=working.index, dtype="Int64"
+        )
+        working["_disc_no"] = pd.Series(disc_no, index=working.index, dtype="string")
+        order += ["_disc_no_digit_count", "_disc_no"]
+    return order
 
 
 def normalize_fundamentals(raw: pd.DataFrame, calendar: pd.DatetimeIndex) -> pd.DataFrame:
@@ -97,50 +112,30 @@ def normalize_fundamentals(raw: pd.DataFrame, calendar: pd.DatetimeIndex) -> pd.
     for col in CARRY_NUM:
         if col in working.columns:
             working[col] = pd.to_numeric(working[col], errors="coerce")
-    # A blank string carries no value: make it null so it neither overrides a
-    # same-day disclosure nor the forward-filled one.
     for col in CARRY_STR:
         if col in working.columns:
-            blank = (working[col].astype("string").str.strip() == "").fillna(False)
-            working[col] = working[col].mask(blank)
+            working[col] = _blank_strings_as_null(working[col])
 
-    # effective date = first trading day STRICTLY AFTER DiscDate (no same-day use)
-    pos = np.searchsorted(cal_arr, working["DiscDate"].to_numpy(), side="right")
-    in_cal = pos < len(cal_arr)
-    working = working[in_cal].copy()
-    working["eff_date"] = cal_arr[pos[in_cal]]
+    first_session_strictly_after_disclosure = np.searchsorted(
+        cal_arr, working["DiscDate"].to_numpy(), side="right"
+    )
+    has_effective_session = first_session_strictly_after_disclosure < len(cal_arr)
+    working = working[has_effective_session].copy()
+    working["eff_date"] = cal_arr[first_session_strictly_after_disclosure[has_effective_session]]
 
     present_num = [c for c in CARRY_NUM if c in working.columns]
     present_str = [c for c in CARRY_STR if c in working.columns]
     keep = ["Code", "eff_date", "DiscDate"] + present_num + present_str
-    # Disclosure order within a day: DiscTime (as a time of day), then DiscNo
-    # (as an integer, compared exactly by digit count then digits); a stable
-    # sort keeps the input order only for disclosures that tie on all of them.
-    # A missing or unusable key sorts first, so it never outranks a keyed row.
-    order = ["Code", "DiscDate"]
-    if "DiscTime" in working.columns:
-        working["_disc_time"] = pd.Series(
-            [_disc_time_key(value) for value in working["DiscTime"]], index=working.index, dtype="Int64"
-        )
-        order.append("_disc_time")
-    if "DiscNo" in working.columns:
-        disc_no = [_disc_no_key(value) for value in working["DiscNo"]]
-        working["_disc_no_len"] = pd.Series(
-            [None if key is None else len(key) for key in disc_no], index=working.index, dtype="Int64"
-        )
-        working["_disc_no"] = pd.Series(disc_no, index=working.index, dtype="string")
-        order += ["_disc_no_len", "_disc_no"]
-    # Same-day disclosures merge field by field (GroupBy.last skips nulls), so
-    # a forecast revision does not drop the results published alongside it.
-    ev = (
-        working.sort_values(order, kind="mergesort", na_position="first")[keep]
+    disclosure_order = _add_disclosure_order_keys(working)
+    latest_non_null_per_field_per_effective_day = (
+        working.sort_values(disclosure_order, kind="mergesort", na_position="first")[keep]
         .groupby(["Code", "eff_date"], sort=False)
         .last()
         .reset_index()
     )
 
     frames = []
-    for code, group in ev.groupby("Code", sort=False):
+    for code, group in latest_non_null_per_field_per_effective_day.groupby("Code", sort=False):
         g = group.drop(columns=["Code"]).set_index("eff_date").sort_index()
         g = g.reindex(cal).ffill()
         g["instrument"] = code
@@ -149,8 +144,8 @@ def normalize_fundamentals(raw: pd.DataFrame, calendar: pd.DatetimeIndex) -> pd.
     panel = pd.concat(frames)
     panel.index.name = "datetime"
     panel = panel.rename(columns={"DiscDate": SRC_DISC_DATE_COLUMN})
-    # Drop rows before a code's first disclosure (no fundamental as-of yet).
-    panel = panel[panel[SRC_DISC_DATE_COLUMN].notna()].copy()
+    has_disclosure_as_of = panel[SRC_DISC_DATE_COLUMN].notna()
+    panel = panel[has_disclosure_as_of].copy()
     panel = panel.set_index("instrument", append=True).reorder_levels(
         ["datetime", "instrument"]
     ).sort_index()

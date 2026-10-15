@@ -20,38 +20,17 @@ if TYPE_CHECKING:
 
 
 def _keychain_api_key_service() -> str:
-    """macOS Keychain generic-password service name for the API key.
-
-    Evaluated at call time so ``JQQLIB_KEYCHAIN_API_KEY_SERVICE`` set after
-    import still takes effect. Override the env var when sharing a Keychain
-    with tools that already use a different naming convention.
-    """
     return os.getenv("JQQLIB_KEYCHAIN_API_KEY_SERVICE", "jquants-api-key")
 
 
 def _keychain_refresh_token_service() -> str:
-    """macOS Keychain generic-password service name for the refresh token.
-
-    Evaluated at call time so ``JQQLIB_KEYCHAIN_REFRESH_TOKEN_SERVICE`` set
-    after import still takes effect.
-    """
     return os.getenv("JQQLIB_KEYCHAIN_REFRESH_TOKEN_SERVICE", "jquants-refresh-token")
 
 
-# Deliberately noisy escape hatch; see create_jquants_client docstring.
 _ALLOW_YAML_CREDENTIALS_ENV = "JQQLIB_ALLOW_YAML_CREDENTIALS"
 
 
-def _read_keychain_secret(service: str) -> str | None:
-    """Read a secret VALUE from a macOS Keychain generic-password entry.
-
-    This deliberately passes ``-w`` because the caller needs the value itself
-    (an existence-only check must never pass ``-w``). The returned
-    value is the caller's responsibility: it must never be logged, printed,
-    or included in an exception/error message. Returns ``None`` (never an
-    empty string) when the entry is absent, empty, or ``security`` cannot be
-    run, so callers can fall through to the next credential source.
-    """
+def _read_keychain_secret_value_or_none(service: str) -> str | None:
     try:
         completed = subprocess.run(
             ["security", "find-generic-password", "-s", service, "-w"],
@@ -68,12 +47,6 @@ def _read_keychain_secret(service: str) -> str | None:
 
 
 def _refresh_token_client(refresh_token: str) -> Client:
-    """Build the legacy v1 (refresh-token) client.
-
-    ``jquantsapi.Client`` was removed from jquants-api-client 2.6; on such
-    versions only the API-key path (``ClientV2``) is available, so fail with an
-    actionable message instead of a bare ImportError.
-    """
     try:
         from jquantsapi import Client
     except ImportError as exc:
@@ -101,22 +74,17 @@ def create_jquants_client(config: dict) -> Client | ClientV2:
     ``jquants.api_key`` / ``jquants.refresh_token`` in ``config.yaml`` to be
     used, in which case an ALERT is printed to stderr every time it fires.
     """
-    # jquantsapi (and transitively pandas) is imported lazily at each
-    # construction site below, not up front: the missing-credentials path must
-    # raise ValueError without paying for that import, so a caller that treats
-    # "no credentials" as a fast, sanitized no-op is not masked by an unrelated
-    # import failure.
     jq_conf = config.get("jquants", {})
     if not isinstance(jq_conf, dict):
         jq_conf = {}
 
-    api_key = os.getenv("JQUANTS_API_KEY") or _read_keychain_secret(_keychain_api_key_service())
+    api_key = os.getenv("JQUANTS_API_KEY") or _read_keychain_secret_value_or_none(_keychain_api_key_service())
     if api_key:
         from jquantsapi import ClientV2
 
         return ClientV2(api_key=api_key)
 
-    refresh_token = os.getenv("JQUANTS_REFRESH_TOKEN") or _read_keychain_secret(
+    refresh_token = os.getenv("JQUANTS_REFRESH_TOKEN") or _read_keychain_secret_value_or_none(
         _keychain_refresh_token_service()
     )
     if refresh_token:
@@ -161,12 +129,7 @@ def create_jquants_client(config: dict) -> Client | ClientV2:
     )
 
 
-# Status-less transient errors that are not already caught as
-# TimeoutError/ConnectionError/OSError but are still worth a bounded retry
-# (e.g. truncated/chunked responses, name-resolution blips, reset peers).
-# Authentication failures (401/403) are deliberately excluded: on the static
-# ClientV2 api-key path there is nothing to re-auth, so they must fail fast.
-_TRANSIENT_STATUSLESS_RE = re.compile(
+_TRANSIENT_NETWORK_MESSAGE_RE = re.compile(
     r"connection reset|connection aborted|chunked|incomplete read|"
     r"temporarily unavailable|temporary failure in name resolution|"
     r"timed out|read timed out|eof occurred|broken pipe|"
@@ -179,7 +142,6 @@ _TRANSIENT_STATUSES = frozenset({429, 500, 502, 503, 504})
 
 
 def _error_status(error: Exception) -> int | None:
-    """HTTP status attached to an API error (``status_code`` or ``response.status_code``), if any."""
     status = getattr(error, "status_code", None)
     if status is None:
         status = getattr(getattr(error, "response", None), "status_code", None)
@@ -187,14 +149,21 @@ def _error_status(error: Exception) -> int | None:
 
 
 def _is_transient_statusless(error: Exception) -> bool:
-    """True for status-less errors that look like a transient network blip.
+    return bool(_TRANSIENT_NETWORK_MESSAGE_RE.search(str(error)))
 
-    Note: connection/timeout errors from requests subclass OSError and are
-    already handled by the typed check in call_jquants_with_retry;
-    this fuzzy message match only covers the residual status-less cases that
-    carry no usable type or status_code.
-    """
-    return bool(_TRANSIENT_STATUSLESS_RE.search(str(error)))
+
+def _is_transient(
+    error: Exception,
+    *,
+    typed_transient_errors: tuple[type[BaseException], ...],
+    retry_statusless: bool,
+) -> bool:
+    status = _error_status(error)
+    if status is not None:
+        return status in _TRANSIENT_STATUSES
+    if isinstance(error, typed_transient_errors):
+        return True
+    return retry_statusless and _is_transient_statusless(error)
 
 
 def call_jquants_with_retry(
@@ -228,18 +197,8 @@ def call_jquants_with_retry(
         try:
             return api_call()
         except Exception as e:
-            # Classify by HTTP status first: requests.HTTPError subclasses
-            # OSError, so an OSError check ahead of this would retry 401/403/404.
-            status = _error_status(e)
-            if status is not None:
-                transient = status in _TRANSIENT_STATUSES
-            elif isinstance(e, (TimeoutError, ConnectionError, OSError, requests.exceptions.RetryError)):
-                transient = True
-            else:
-                # Status-less network blips that carry no usable type.
-                transient = retry_statusless and _is_transient_statusless(e)
-
-            if not transient:
+            typed_transient_errors = (TimeoutError, ConnectionError, OSError, requests.exceptions.RetryError)
+            if not _is_transient(e, typed_transient_errors=typed_transient_errors, retry_statusless=retry_statusless):
                 raise
             last_error = e
             if attempt >= retries:
@@ -252,6 +211,10 @@ def call_jquants_with_retry(
 
 
 def iter_date_chunks(start: dt.date, end: dt.date, days: int) -> Iterable[tuple[dt.date, dt.date]]:
+    """Yield inclusive ``(chunk_start, chunk_end)`` windows of at most ``days`` days from ``start`` to ``end``.
+
+    Raises ``ValueError`` when ``days`` is below 1.
+    """
     if days < 1:
         raise ValueError(f"days must be 1 or greater, got {days}.")
 
@@ -277,6 +240,7 @@ class _RequestPacer:
 
 
 def iter_month_starts(start_date: dt.date, end_date: dt.date) -> Iterable[dt.date]:
+    """Yield the first day of every month that overlaps ``start_date`` to ``end_date``."""
     cursor = dt.date(start_date.year, start_date.month, 1)
     while cursor <= end_date:
         yield cursor
@@ -299,6 +263,15 @@ def fetch_daily_quotes(
     request_interval_sec: float = 0.0,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> pd.DataFrame:
+    """Fetch daily quotes from ``start_date`` to ``end_date`` in windows of ``chunk_days`` days.
+
+    With ``codes`` there is one request per code and window, otherwise one request per window for all codes.
+    ``ClientV2`` uses ``get_eq_bars_daily`` and, when an all-codes window is rejected with HTTP 400, requests that
+    window one day at a time; the legacy client uses ``get_prices_daily_quotes``. Each request is retried by
+    ``call_jquants_with_retry`` with its own backoff, and consecutive requests (not retries) are spaced by
+    ``request_interval_sec``. Returns the raw J-Quants columns with a timezone-naive ``Date``, or an empty frame
+    when nothing was returned.
+    """
     import pandas as pd
 
     frames: list[pd.DataFrame] = []
@@ -405,6 +378,11 @@ def fetch_bulk_daily_quotes(
     request_interval_sec: float = 0.0,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> pd.DataFrame:
+    """Download the monthly bulk daily-quote files that overlap ``start_date`` to ``end_date``.
+
+    Returns the rows inside the range with a timezone-naive ``Date``. Raises ``ValueError`` when J-Quants lists no
+    bulk files, or when none covers the requested months; only the latter message names the available months.
+    """
     import pandas as pd
     from jquantsapi import BulkEndpoint
 

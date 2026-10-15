@@ -53,3 +53,5 @@ Qlib の `$factor` と調整済み価格・出来高を出します。配当は�
 同じ readiness 検査を書き込み前に実行します。`manifest` は生成物の lineage と
 品質結果、`audit` は直近営業日の欠損を扱います。schema のソースは
 `src/jqqlib/contracts/` です。[artifact の詳細](operations.md#5-dataset-artifacts)を参照してください。
+
+実装上の判断とその背景（なぜその設計にしたか）は [設計メモ](design-notes.md) にまとめています。

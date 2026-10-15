@@ -18,6 +18,12 @@ if TYPE_CHECKING:
 
 
 DEFAULT_PARQUET_FILENAME = "daily_quotes.parquet"
+VENDOR_PASSTHROUGH_CSV_COLUMNS = (
+    "AdjFactor", "AdjO", "AdjH", "AdjL", "AdjC", "AdjVo",
+    "AdjustmentFactor", "AdjustmentOpen", "AdjustmentHigh",
+    "AdjustmentLow", "AdjustmentClose", "AdjustmentVolume",
+    "ExRT",
+)
 
 
 class NoDataFetchedError(ValueError):
@@ -41,6 +47,13 @@ def write_parquet(
     *,
     require_adjustment_factor: bool = False,
 ) -> Path:
+    """Normalize fetched quotes and write them to ``daily_quotes.parquet`` in ``parquet_dir``; return its path.
+
+    ``merge_mode="upsert"`` merges with the existing file, the new row winning per ``symbol`` and ``date``. Rows are
+    sorted so identical content gives identical bytes, and the Qlib readiness checks run before the atomic
+    replace. Raises ``NoDataFetchedError`` for an empty frame and ``RuntimeError``, leaving the file unchanged,
+    when the data is not Qlib-ready.
+    """
     import pandas as pd
 
     parquet_dir.mkdir(parents=True, exist_ok=True)
@@ -70,19 +83,13 @@ def write_parquet(
     columns = list(PARQUET_BASE_COLUMNS)
     if "ex_rights_type" in to_write.columns:
         columns.append("ex_rights_type")
-    # Deterministic ordering: identical logical content must produce identical
-    # bytes so that the parquet content hash (lineage.parquet_sha256) is a stable
-    # publish/no-op signal regardless of fetch order or fetch window.
-    to_write = to_write[columns].sort_values(["symbol", "date"]).reset_index(drop=True)
+    symbol_date_sorted_rows = to_write[columns].sort_values(["symbol", "date"]).reset_index(drop=True)
 
-    # Validate before replacing the file: rows that fail the readiness checks
-    # would otherwise stay in the Parquet, and run-daily (which resumes after
-    # the Parquet's last date) would never re-fetch them, failing every run.
-    errors = qlib_readiness_errors(to_write)
+    errors = qlib_readiness_errors(symbol_date_sorted_rows)
     if errors:
         raise RuntimeError(f"Data is not Qlib-ready; {output_path} left unchanged: " + "; ".join(errors))
 
-    _write_parquet_atomic(to_write, output_path)
+    _write_parquet_atomic(symbol_date_sorted_rows, output_path)
     return output_path
 
 
@@ -101,6 +108,11 @@ def csv_to_parquet(csv_path: Path, parquet_dir: Path, *, require_adjustment_fact
 
 
 def write_bootstrap_csv(df: pd.DataFrame, output_path: Path) -> Path:
+    """Write fetched quotes as a bootstrap CSV; return its path.
+
+    The required columns come first, then any vendor-adjusted columns present, one row per ``Code`` and ``Date``.
+    Raises ``NoDataFetchedError`` for an empty frame and ``ValueError`` when a required column is missing.
+    """
     import pandas as pd
 
     normalized_df = normalize_daily_quote_columns(df)
@@ -114,18 +126,8 @@ def write_bootstrap_csv(df: pd.DataFrame, output_path: Path) -> Path:
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # The required prefix is fixed, so the CSV shape stays stable. Columns the
-    # bulk endpoint may add (the vendor's own adjusted values) are passed through
-    # unchanged rather than dropped; the pipeline itself never reads them.
-    optional_vendor_columns = [
-        column for column in (
-            "AdjFactor", "AdjO", "AdjH", "AdjL", "AdjC", "AdjVo",
-            "AdjustmentFactor", "AdjustmentOpen", "AdjustmentHigh",
-            "AdjustmentLow", "AdjustmentClose", "AdjustmentVolume",
-            "ExRT",
-        ) if column in normalized_df.columns
-    ]
-    to_write = normalized_df.loc[:, [*BOOTSTRAP_CSV_COLUMNS, *optional_vendor_columns]].copy()
+    vendor_columns_present = [column for column in VENDOR_PASSTHROUGH_CSV_COLUMNS if column in normalized_df.columns]
+    to_write = normalized_df.loc[:, [*BOOTSTRAP_CSV_COLUMNS, *vendor_columns_present]].copy()
     to_write["Date"] = pd.to_datetime(to_write["Date"]).dt.tz_localize(None).dt.strftime("%Y-%m-%d")
     to_write = to_write.sort_values(["Code", "Date"]).drop_duplicates(subset=["Code", "Date"], keep="last")
     to_write.to_csv(output_path, index=False)

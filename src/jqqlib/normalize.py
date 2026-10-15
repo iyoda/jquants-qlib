@@ -109,6 +109,10 @@ def normalize_for_qlib(df: pd.DataFrame, *, require_adjustment_factor: bool = Fa
 
 
 def normalize_daily_quote_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Rename the V2 short column names (``O``, ``H``, ``L``, ``C``, ``Vo``, ``Va``) to the long ones.
+
+    Other columns are kept unchanged.
+    """
     column_map = {
         "O": "Open",
         "H": "High",

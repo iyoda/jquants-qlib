@@ -422,8 +422,6 @@ def _build_quality_inspection(
     dumped_factor_invalid_rows = None
     dumped_factor_latest_not_one_symbols = None
     if adjustment == QLIB_ADJUSTMENT_VENDOR_FACTOR and not df.empty and set(QLIB_FIELDS).issubset(df.columns):
-        # vendor_factor promises a $factor series: a Parquet the factor cannot be
-        # computed from is a failed dataset, not one that skips the check.
         dumped = None
         try:
             dumped = apply_vendor_adjustment(df)
@@ -567,18 +565,22 @@ def _read_instrument_count(qlib_dir: Path) -> int:
 
 
 def csv_source_manifest_path(csv_path: Path) -> Path:
+    """Return the path of the source manifest written next to a bootstrap CSV."""
     return csv_path.with_suffix(csv_path.suffix + CSV_SOURCE_MANIFEST_SUFFIX)
 
 
 def dataset_manifest_path(qlib_dir: Path) -> Path:
+    """Return the path of ``dataset_manifest.json`` inside ``qlib_dir``."""
     return qlib_dir / DATASET_MANIFEST_FILENAME
 
 
 def dataset_quality_report_path(qlib_dir: Path) -> Path:
+    """Return the path of ``dataset_quality_report.json`` inside ``qlib_dir``."""
     return qlib_dir / DATASET_QUALITY_REPORT_FILENAME
 
 
 def read_dataset_manifest(qlib_dir: Path) -> dict[str, Any] | None:
+    """Return the dataset manifest in ``qlib_dir``, or ``None`` when there is none."""
     path = dataset_manifest_path(qlib_dir)
     if not path.exists():
         return None
@@ -586,6 +588,7 @@ def read_dataset_manifest(qlib_dir: Path) -> dict[str, Any] | None:
 
 
 def read_dataset_quality_report(qlib_dir: Path) -> dict[str, Any] | None:
+    """Return the dataset quality report in ``qlib_dir``, or ``None`` when there is none."""
     path = dataset_quality_report_path(qlib_dir)
     if not path.exists():
         return None
@@ -593,6 +596,10 @@ def read_dataset_quality_report(qlib_dir: Path) -> dict[str, Any] | None:
 
 
 def write_json_atomic(path: Path, payload: dict[str, Any]) -> Path:
+    """Write ``payload`` as indented, key-sorted JSON through a temporary file and an atomic replace.
+
+    Returns ``path``.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -607,6 +614,10 @@ def write_csv_source_manifest(
     requested_start: dt.date | None = None,
     requested_end: dt.date | None = None,
 ) -> Path:
+    """Record next to a bootstrap CSV where it came from.
+
+    The manifest holds ``source_kind`` and the requested date range. Returns the manifest path.
+    """
     payload = {
         "schema_version": DATASET_MANIFEST_SCHEMA_VERSION,
         "generated_at": _utc_now(),
@@ -622,6 +633,7 @@ def write_csv_source_manifest(
 
 
 def read_csv_source_manifest(csv_path: Path) -> dict[str, Any] | None:
+    """Return the source manifest of a bootstrap CSV, or ``None`` when there is none."""
     path = csv_source_manifest_path(csv_path)
     if not path.exists():
         return None
@@ -635,6 +647,7 @@ def build_dataset_manifest(
     source: dict[str, Any],
     adjustment: str = DEFAULT_QLIB_ADJUSTMENT,
 ) -> dict[str, Any]:
+    """Build, without writing it, the dataset manifest for a Parquet file and the Qlib provider built from it."""
     df = _read_dataset_parquet(parquet_path)
     quality = _build_quality_inspection(df, qlib_dir, adjustment=adjustment)
     return _dataset_manifest_payload(
@@ -672,7 +685,6 @@ def _dataset_manifest_payload(
         "rows": int(len(df)),
         "instruments": int(df["symbol"].nunique()),
         "parquet_sha256": parquet_sha256,
-        # The same Parquet dumped with another qlib.adjustment is another dataset.
         "adjustment": adjustment,
         "source": source,
     }
@@ -721,6 +733,10 @@ def build_dataset_quality_report(
     manifest: dict[str, Any] | None = None,
     adjustment: str = DEFAULT_QLIB_ADJUSTMENT,
 ) -> dict[str, Any]:
+    """Build, without writing it, the quality report for a Parquet file and its Qlib provider.
+
+    ``manifest``, when given, supplies the ``dataset_id`` the report refers to.
+    """
     import pandas as pd
 
     df = pd.read_parquet(parquet_path)
@@ -758,6 +774,7 @@ def write_dataset_manifest(
     source: dict[str, Any],
     adjustment: str = DEFAULT_QLIB_ADJUSTMENT,
 ) -> Path:
+    """Build and atomically write ``dataset_manifest.json`` into ``qlib_dir``; return its path."""
     payload = build_dataset_manifest(
         parquet_path=parquet_path, qlib_dir=qlib_dir, source=source, adjustment=adjustment
     )
@@ -771,6 +788,7 @@ def write_dataset_quality_report(
     manifest: dict[str, Any] | None = None,
     adjustment: str = DEFAULT_QLIB_ADJUSTMENT,
 ) -> Path:
+    """Build and atomically write ``dataset_quality_report.json`` into ``qlib_dir``; return its path."""
     payload = build_dataset_quality_report(
         parquet_path=parquet_path, qlib_dir=qlib_dir, manifest=manifest, adjustment=adjustment
     )
@@ -784,8 +802,11 @@ def write_dataset_artifacts(
     source: dict[str, Any],
     adjustment: str = DEFAULT_QLIB_ADJUSTMENT,
 ) -> tuple[Path, Path]:
-    # One read and one quality inspection serve both artifacts: the inspection
-    # runs the vendor-factor transform over the whole dataset.
+    """Write the dataset manifest and the quality report from one read and one quality inspection.
+
+    The manifest lineage records the SHA-256 of the final quality report. Returns
+    ``(manifest_path, quality_report_path)``.
+    """
     df = _read_dataset_parquet(parquet_path)
     quality = _build_quality_inspection(df, qlib_dir, adjustment=adjustment)
     manifest = _dataset_manifest_payload(
@@ -796,9 +817,12 @@ def write_dataset_artifacts(
         dataset_quality_report_path(qlib_dir),
         _quality_report_payload(quality, parquet_path=parquet_path, qlib_dir=qlib_dir, manifest=manifest),
     )
-    # Bind the quality decision into the manifest after the report is final.
+    _bind_final_quality_report_into_manifest(manifest, quality_path)
+    write_json_atomic(manifest_path, manifest)
+    return manifest_path, quality_path
+
+
+def _bind_final_quality_report_into_manifest(manifest: dict[str, Any], quality_path: Path) -> None:
     manifest["lineage"]["quality_report_sha256"] = _sha256_file(quality_path)
     manifest["lineage"].pop("manifest_sha256", None)
     manifest["lineage"]["manifest_sha256"] = _sha256_json(manifest)
-    write_json_atomic(manifest_path, manifest)
-    return manifest_path, quality_path

@@ -12,6 +12,11 @@ DEFAULT_PUBLISH_CHECK_GIT_REF = "origin/main"
 
 
 def qlib_adjustment(config: dict) -> str:
+    """Return the validated ``qlib.adjustment``, ``vendor_factor`` when it or the ``qlib`` section is unset or null.
+
+    Raises ``ValueError`` when ``qlib`` is not a mapping or the value is neither ``vendor_factor`` nor ``none``, and
+    ``TypeError`` when the value is unhashable, such as a list.
+    """
     qlib = config.get("qlib", {})
     if qlib is None:
         qlib = {}
@@ -27,6 +32,17 @@ def qlib_adjustment(config: dict) -> str:
 
 
 def load_config(path: Path) -> dict:
+    """Load and validate a YAML configuration file.
+
+    ``storage.parquet_dir`` and ``storage.qlib_dir`` are required; ``storage.audit_dir``, ``qlib.adjustment`` and
+    ``publish_check.git_ref`` get their defaults. Relative storage paths stay relative to the working directory.
+    An empty ``publish_check`` section (``null``) gets the default ``git_ref``.
+
+    Raises ``FileNotFoundError`` for a missing file and ``ValueError`` for invalid YAML, a document or a ``storage``
+    or ``qlib`` section that is not a mapping, a ``publish_check`` section that is neither a mapping nor empty, a
+    missing or invalid storage path, an unknown ``qlib.adjustment`` or an invalid ``git_ref``. An unhashable
+    ``qlib.adjustment`` such as a list raises ``TypeError``.
+    """
     import yaml
 
     with path.open("r", encoding="utf-8") as f:
@@ -43,8 +59,6 @@ def load_config(path: Path) -> dict:
         if key not in storage:
             raise ValueError(f"storage.{key} is required.")
     storage.setdefault("audit_dir", "./data/audit")
-    # Keep relative paths relative to the process working directory, matching
-    # the existing parquet_dir and qlib_dir consumers.
     for key in ("parquet_dir", "qlib_dir", "audit_dir"):
         value = storage[key]
         if not isinstance(value, str) or not value.strip() or "\x00" in value:

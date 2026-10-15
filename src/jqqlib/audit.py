@@ -62,7 +62,7 @@ def find_recent_business_day_gaps(
     end = dataset_end if dataset_end is not None else max(present)
 
     gaps: list[dt.date] = []
-    suppressed: list[dt.date] = []
+    suppressed_non_sessions: list[dt.date] = []
     cursor = as_of
     yielded = 0
     while yielded <= window_business_days:
@@ -72,14 +72,12 @@ def find_recent_business_day_gaps(
             if in_span_and_absent:
                 gaps.append(cursor)
         elif is_mon_fri(cursor) and in_span_and_absent:
-            # A weekday that is not an XTKS session: the old heuristic would
-            # have called this a gap. Record the suppression.
-            suppressed.append(cursor)
+            suppressed_non_sessions.append(cursor)
         cursor -= dt.timedelta(days=1)
 
     return GapAuditResult(
         real_gaps=sorted(gaps),
-        suppressed_non_sessions=sorted(suppressed),
+        suppressed_non_sessions=sorted(suppressed_non_sessions),
         window_business_days=window_business_days,
     )
 

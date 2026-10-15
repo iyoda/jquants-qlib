@@ -9,12 +9,18 @@ Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -e ".[dev]"
+lefthook install
 python -m unittest discover -s tests
 jqqlib --help
 jqqlib --version
 ruff check .
 mypy
 ```
+
+`lefthook install` sets up the git hooks in `lefthook.yml`: on commit, `ruff check` and
+`scripts/check_comments.py` run on the staged Python files; on push, `mypy` and the unittest suite
+run. The hooks use `.venv/bin/python`; set `JQQLIB_PYTHON` to use another interpreter. Hooks can be
+skipped locally, so CI runs the same checks in the required `lint + type-check` job.
 
 `jqqlib` is the console script installed by the package; `python -m jqqlib` is equivalent.
 `jqqlib init-config [PATH]` writes the packaged example configuration (default `./config.yaml`,
@@ -56,9 +62,33 @@ coverage run -m unittest discover -s tests && coverage report
 - Keep the pipeline deterministic: identical inputs must produce byte-identical Parquet and the same `lineage.parquet_sha256`.
 - Changes to `dataset_manifest.json` / `dataset_quality_report.json` must keep `src/jqqlib/contracts/*.schema.json` in sync with the code. `tests/test_contracts_package.py` checks the packaged schemas load, and `tests/test_manifest.py` validates a generated manifest against them; update both when the schema changes. Bump `schema_version` for breaking changes.
 - Add or update a unittest for every behaviour change. The suite is `unittest`, not pytest.
+- Comments and docstrings follow [the rules below](#comments-and-docstrings).
 - Keep pull requests focused. Describe *why* in the PR body and link the issue if one exists.
 - Target the `dev` branch (the repository default). `master` only receives release merges from
   `dev`; a merge into `master` triggers the release workflow (see [releasing](docs/releasing.md)).
+
+## Comments and docstrings
+
+The Python files (`*.py`) under `src/jqqlib/` and `scripts/` carry their intent in names and tests, not in
+comments. Other file types there, such as `scripts/run_daily.sh`, are out of scope.
+
+- No `#` comments. Name functions, constants and variables after what they mean, and pin the *why* with a test
+  whose name says it.
+- The only `#` allowed, in exactly these forms: a shebang on line 1, a bare `# pragma: no cover`,
+  `# type: ignore[<code>]  # <reason>` (mypy rejects a reason without its own `#`), and
+  `# noqa: <CODE>[, <CODE>]` with nothing after it.
+- Docstrings belong only to the public API of the typed package, and are required there: modules, classes,
+  functions and methods in `src/jqqlib` whose own name and every enclosing module and class name do not start
+  with `_` (dunder methods count as public). None on anything else: not in a `_`-prefixed module or class, not on
+  definitions inside functions, and not in `scripts/`. Do not declare `__all__`
+  outside `src/jqqlib/__init__.py`: ruff's `D1` would stop requiring docstrings on names left out of it.
+- Background that neither a name nor a test can carry (why a design was chosen, what it avoids) goes in
+  [docs/design-notes.md](docs/design-notes.md). `tests/test_design_notes.py` fails when a name, test, path or
+  file name cited there no longer exists, so update the page in the same change as a rename.
+- Enforcement: `python scripts/check_comments.py` checks comments and where docstrings may be; ruff's `D1`
+  requires the public docstrings and `PGH003` / `PGH004` / `RUF100` / `ERA001` police suppression comments;
+  mypy runs with `ignore-without-code` and `warn_unused_ignores`. unittest, the lefthook hooks and the
+  required CI job run them.
 
 ## Reporting a bug
 
