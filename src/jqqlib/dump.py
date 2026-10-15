@@ -55,19 +55,24 @@ def _replace_generated_qlib_subtrees(staged_qlib_dir: Path, qlib_dir: Path) -> N
             source.rename(target)
             installed.append(target)
     except BaseException:
-        # BaseException: a KeyboardInterrupt/SystemExit mid-swap must restore the
-        # previous subtrees too. backup_root is removed only once it is empty, so
-        # a failed restore leaves the old data recoverable instead of deleting it.
-        for target in reversed(installed):
-            if target.exists():
-                shutil.rmtree(target)
-        for target, backup in reversed(backups):
-            if backup.exists() and not target.exists():
-                backup.rename(target)
-        with contextlib.suppress(OSError):
-            backup_root.rmdir()
+        _roll_back_subtree_swap(installed, backups)
+        _remove_backup_root_once_empty(backup_root)
         raise
     shutil.rmtree(backup_root, ignore_errors=True)
+
+
+def _roll_back_subtree_swap(installed: list[Path], backups: list[tuple[Path, Path]]) -> None:
+    for target in reversed(installed):
+        if target.exists():
+            shutil.rmtree(target)
+    for target, backup in reversed(backups):
+        if backup.exists() and not target.exists():
+            backup.rename(target)
+
+
+def _remove_backup_root_once_empty(backup_root: Path) -> None:
+    with contextlib.suppress(OSError):
+        backup_root.rmdir()
 
 
 def _requested_fields(
@@ -153,12 +158,9 @@ def parquet_to_qlib(
         df = apply_vendor_adjustment(df)
     elif "factor" in requested:
         raise ValueError("factor is not dumped when qlib.adjustment is none.")
-    # Stage next to the real directory: when qlib_dir is a symlink (e.g. a
-    # published provider) on another filesystem, staging beside the link would
-    # make the final rename fail with EXDEV.
-    staging_parent = qlib_dir.resolve().parent
-    staging_parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".qlib_build_", dir=str(staging_parent)) as build_dir:
+    beside_resolved_qlib_dir = qlib_dir.resolve().parent
+    beside_resolved_qlib_dir.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".qlib_build_", dir=str(beside_resolved_qlib_dir)) as build_dir:
         staged_qlib_dir = Path(build_dir) / "qlib"
         _dump_frame_to_staging(df, staged_qlib_dir, requested)
         _replace_generated_qlib_subtrees(staged_qlib_dir, qlib_dir)

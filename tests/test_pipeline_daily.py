@@ -15,6 +15,7 @@ import yaml
 
 from jqqlib.audit import GapAuditResult
 from jqqlib.pipeline import (
+    build_parser,
     catch_up_start_date,
     cli_error_exit_code,
     iter_recent_business_dates,
@@ -24,6 +25,7 @@ from jqqlib.pipeline import (
     validate_etl_config,
 )
 from jqqlib.store import NoDataFetchedError
+from jqqlib.trading_calendar import ExactCalendarRequired
 
 
 class RunDailyTests(unittest.TestCase):
@@ -226,6 +228,38 @@ class RunDailyTests(unittest.TestCase):
 
 
 class AuditCommandTests(unittest.TestCase):
+    def _config(self, tmp: str) -> Path:
+        config_path = Path(tmp) / "settings.yaml"
+        config_path.write_text(yaml.safe_dump({"storage": {
+            "parquet_dir": str(Path(tmp) / "parquet"),
+            "qlib_dir": str(Path(tmp) / "qlib"),
+            "audit_dir": str(Path(tmp) / "audit"),
+        }}))
+        return config_path
+
+    def test_unavailable_calendar_exits_2_not_as_a_data_gap(self):
+        for command, patched in (("audit", "jqqlib.pipeline.run_audit"), ("run-daily", "jqqlib.pipeline.run_daily")):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as tmp:
+                stderr = io.StringIO()
+                with (
+                    mock.patch("sys.argv", ["jqqlib", command, "--config", str(self._config(tmp))]),
+                    mock.patch(patched, side_effect=ExactCalendarRequired("no XTKS")),
+                    contextlib.redirect_stdout(io.StringIO()),
+                    contextlib.redirect_stderr(stderr),
+                    self.assertRaises(SystemExit) as raised,
+                ):
+                    main()
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn("XTKS trading calendar unavailable", stderr.getvalue())
+                self.assertFalse((Path(tmp) / "audit" / "last_audit.json").exists())
+
+    def test_run_daily_accepts_the_audit_window_flag_the_daily_wrapper_forwards(self):
+        args = build_parser().parse_args(
+            ["run-daily", "--config", "config.yaml", "--as-of", "2026-08-12", "--window-business-days", "5"]
+        )
+        self.assertEqual(args.command, "run-daily")
+        self.assertEqual(args.window_business_days, 5)
+
     def test_audit_writes_to_configured_directory_and_preserves_exit_status(self):
         for gaps in ([], [dt.date(2026, 8, 10)]):
             with self.subTest(gaps=gaps), tempfile.TemporaryDirectory() as tmp:

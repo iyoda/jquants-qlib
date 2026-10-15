@@ -100,6 +100,22 @@ class CreateJquantsClientCredentialTests(unittest.TestCase):
         self.assertIn("JQUANTS_API_KEY", str(ctx.exception))
         self.assertNotIn("fixture-refresh", str(ctx.exception))
 
+    def test_missing_credentials_raise_value_error_without_importing_jquantsapi(self) -> None:
+        import builtins
+
+        real_import = builtins.__import__
+
+        def _jquantsapi_unimportable(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "jquantsapi":
+                raise ImportError("jquantsapi must not be imported without a credential")
+            return real_import(name, globals, locals, fromlist, level)
+
+        with mock.patch("jqqlib.fetch.subprocess.run", return_value=_KEYCHAIN_MISSING), mock.patch(
+            "builtins.__import__", side_effect=_jquantsapi_unimportable
+        ):
+            with self.assertRaisesRegex(ValueError, "credential is not configured"):
+                create_jquants_client({"jquants": {}})
+
     def test_yaml_without_flag_does_not_succeed_even_with_api_key(self) -> None:
         config = {"jquants": {"api_key": "fixture-yaml-api-key"}}
         with mock.patch("jqqlib.fetch.subprocess.run", return_value=_KEYCHAIN_MISSING):

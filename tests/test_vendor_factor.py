@@ -11,7 +11,7 @@ import pandas as pd
 
 from jqqlib.config import QLIB_ADJUSTMENT_NONE, load_config
 from jqqlib.dump import parquet_to_qlib
-from jqqlib.normalize import normalize_for_qlib
+from jqqlib.normalize import BOOTSTRAP_CSV_COLUMNS, normalize_for_qlib
 from jqqlib.store import csv_to_parquet, write_bootstrap_csv, write_parquet
 from jqqlib.validate import validate_qlib_readiness
 from tests.support.synthetic import write_synthetic_daily_quotes_csv
@@ -52,6 +52,20 @@ def _qlib_restore():
     os.environ["MLFLOW_DISABLE_AGENT_HINT"] = "1"
     mlflow_logger.setLevel(logging.WARNING)
     return restore
+
+
+class BootstrapCsvShapeTests(unittest.TestCase):
+    def test_vendor_adjusted_columns_follow_the_fixed_required_prefix_unchanged(self) -> None:
+        bulk = pd.DataFrame([
+            {"Code": "10010", "Date": "2026-06-01", "O": 100, "H": 110, "L": 90, "C": 100, "Vo": 1000,
+             "Va": 100000, "AdjC": 50.0, "AdjVo": 2000.0, "AdjFactor": 0.5, "Unrelated": "dropped"},
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            written = pd.read_csv(write_bootstrap_csv(bulk, Path(tmp) / "daily_quotes.csv"))
+
+        self.assertEqual(list(written.columns), [*BOOTSTRAP_CSV_COLUMNS, "AdjFactor", "AdjC", "AdjVo"])
+        self.assertEqual(float(written.loc[0, "AdjC"]), 50.0)
+        self.assertEqual(float(written.loc[0, "AdjVo"]), 2000.0)
 
 
 class NormalizeVendorFactorTests(unittest.TestCase):

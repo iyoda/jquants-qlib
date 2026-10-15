@@ -23,6 +23,18 @@ def _exclusive_reverse_cumprod(values: pd.Series, symbols: pd.Series) -> pd.Seri
     return products.groupby(reversed_symbols, sort=False).shift(1, fill_value=1.0).iloc[::-1]
 
 
+def _by_symbol_first_appearance_then_date(frame: pd.DataFrame) -> pd.DataFrame:
+    import pandas as pd
+
+    symbol_first_appearance = pd.Series(pd.factorize(frame["symbol"])[0], index=frame.index)
+    stable_order = (
+        pd.DataFrame({"symbol_first_appearance": symbol_first_appearance, "date": frame["date"]})
+        .sort_values(["symbol_first_appearance", "date"], kind="mergesort")
+        .index
+    )
+    return frame.iloc[stable_order].reset_index(drop=True)
+
+
 def _volume_factors(frame: pd.DataFrame, price_factors: pd.Series) -> pd.Series:
     import pandas as pd
 
@@ -55,26 +67,14 @@ def apply_vendor_adjustment(
     if int(numeric.isna().sum()):
         raise ValueError("Null adjustment_factor values are not allowed when qlib.adjustment is vendor_factor.")
     out["adjustment_factor"] = numeric
-    # Vectorised over all symbols (a per-symbol Python loop dominated large
-    # builds). Rows come out grouped by symbol in first-appearance order, each
-    # symbol sorted by date; rows without a symbol are dropped, as groupby does
-    # (with no symbol at all, the rows are returned unchanged with factor 1.0).
-    keyed = out[out["symbol"].notna()]
-    if keyed.empty:
+    rows_with_symbol = out[out["symbol"].notna()]
+    if rows_with_symbol.empty:
         out["factor"] = 1.0
         return out
-    out = keyed.reset_index(drop=True)
-    symbol_order = pd.Series(pd.factorize(out["symbol"])[0], index=out.index)
-    ordered = out.iloc[
-        pd.DataFrame({"order": symbol_order, "date": out["date"]})
-        .sort_values(["order", "date"], kind="mergesort")
-        .index
-    ].reset_index(drop=True)
-    # float64 for the products: a nullable integer (Int64) factor, e.g. read back
-    # from Parquet, cannot take the grouped shift's 1.0 fill value.
-    factors = ordered["adjustment_factor"].astype("float64")
-    price_cum = _exclusive_reverse_cumprod(factors, ordered["symbol"])
-    volume_cum = _exclusive_reverse_cumprod(_volume_factors(ordered, factors), ordered["symbol"])
+    ordered = _by_symbol_first_appearance_then_date(rows_with_symbol.reset_index(drop=True))
+    float_factors = ordered["adjustment_factor"].astype("float64")
+    price_cum = _exclusive_reverse_cumprod(float_factors, ordered["symbol"])
+    volume_cum = _exclusive_reverse_cumprod(_volume_factors(ordered, float_factors), ordered["symbol"])
     for field in PRICE_FIELDS:
         ordered[field] = ordered[field] * price_cum
     ordered["volume"] = ordered["volume"] / volume_cum

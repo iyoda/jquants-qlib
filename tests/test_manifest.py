@@ -374,6 +374,24 @@ class DatasetManifestTests(unittest.TestCase):
 
         self.assertNotEqual(ids["vendor_factor"], ids[QLIB_ADJUSTMENT_NONE])
 
+    def test_manifest_lineage_binds_the_final_quality_report_bytes(self) -> None:
+        import hashlib
+        import json
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            parquet_path, qlib_dir = self._seed_vendor_dataset(Path(tmpdir), adjustment_factor=[1.0, 1.0])
+            manifest_path, quality_path = write_dataset_artifacts(
+                parquet_path=parquet_path, qlib_dir=qlib_dir, source={"kind": "test"}
+            )
+            report_sha256 = hashlib.sha256(quality_path.read_bytes()).hexdigest()
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        lineage = manifest["lineage"]
+        self.assertEqual(lineage["quality_report_sha256"], report_sha256)
+        recorded_manifest_sha256 = lineage.pop("manifest_sha256")
+        canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+        self.assertEqual(recorded_manifest_sha256, hashlib.sha256(canonical.encode("utf-8")).hexdigest())
+
     def test_write_dataset_artifacts_inspects_the_dataset_once(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             parquet_path, qlib_dir = self._seed_vendor_dataset(Path(tmpdir), adjustment_factor=[1.0, 1.0])

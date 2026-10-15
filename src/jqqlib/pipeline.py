@@ -298,14 +298,6 @@ def run_daily(
     for target_date in iter_recent_business_dates(as_of, max_lookback_business_days):
         start_date = catch_up_start_date(existing_dataset_end, target_date)
         try:
-            # Fetch the full contiguous range [start_date, target_date] in a single
-            # call. write_parquet validates the merged rows before its atomic
-            # (tmp+replace) write, so a failed fetch or rejected data leaves the
-            # Parquet end unchanged for the next run to refill. A later Qlib dump
-            # failure leaves the Parquet ahead, but every dump rebuilds the
-            # provider from the whole Parquet, so the next successful run covers
-            # it. A run that finds no data anywhere in the range still raises
-            # NoDataFetchedError to drive the previous-business-day fallback below.
             if start_date < target_date:
                 logger.info(
                     "Catching up missing range %s to %s.",
@@ -453,15 +445,13 @@ def _committed_manifest(config: dict) -> dict[str, Any] | None:
         )
     rel = _manifest_repo_relpath(config, toplevel)
 
-    def resolve_git_path(path: str, depth: int = 0) -> str | None:
+    def read_committed_file_following_symlinks(path: str, depth: int = 0) -> str | None:
         if depth > 8:
             return None
         result = _git(["show", f"{ref}:{path}"], cwd=toplevel)
         if result.returncode == 0:
             return result.stdout
         parts = Path(path).parts
-        # Find a symlink in any parent component, replace it, then recurse, so a
-        # provider path committed as a symlink to a build directory still resolves.
         for size in range(len(parts) - 1, 0, -1):
             prefix = "/".join(parts[:size])
             tree = _git(["ls-tree", ref, "--", prefix], cwd=toplevel)
@@ -478,10 +468,10 @@ def _committed_manifest(config: dict) -> dict[str, Any] | None:
             if not target:
                 continue
             replaced = os.path.normpath(os.path.join(os.path.dirname(prefix), target, *parts[size:]))
-            return resolve_git_path(replaced.replace(os.sep, "/"), depth + 1)
+            return read_committed_file_following_symlinks(replaced.replace(os.sep, "/"), depth + 1)
         return None
 
-    content = resolve_git_path(rel)
+    content = read_committed_file_following_symlinks(rel)
     if content is None:
         return None
     try:
@@ -592,12 +582,10 @@ def evaluate_publish_check(config_path: Path) -> PublishCheckDecision:
     committed_lineage = committed_manifest.get("lineage", {}) if committed_manifest else {}
     committed = committed_lineage.get("parquet_sha256") if isinstance(committed_lineage, dict) else None
     warning_summary = _quality_warning_summary(report)
-    # Same Parquet, different adjustment (qlib.adjustment switched, or a producer
-    # change to the factor policy): the Qlib dataset differs, so it is a change.
-    changed = decide_publish(current, committed) or (
-        committed_manifest is not None
-        and manifest.get("adjustment_policy") != committed_manifest.get("adjustment_policy")
+    adjustment_policy_changed = committed_manifest is not None and (
+        manifest.get("adjustment_policy") != committed_manifest.get("adjustment_policy")
     )
+    changed = decide_publish(current, committed) or adjustment_policy_changed
     return PublishCheckDecision(
         returncode=0 if changed else 3,
         reason="changed" if changed else "unchanged",
@@ -674,6 +662,10 @@ def init_config(path: Path, *, force: bool = False) -> Path:
     return path
 
 
+def _accept_audit_only_flags_forwarded_by_the_daily_wrapper(run_daily_parser: argparse.ArgumentParser) -> None:
+    run_daily_parser.add_argument("--window-business-days", default=None, type=int, help=argparse.SUPPRESS)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="jqqlib", description="J-Quants to Qlib dataset pipeline")
     parser.add_argument("--version", action="version", version=f"jqqlib {__version__}")
@@ -733,10 +725,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="As-of date (YYYY-MM-DD). 'today' is the current date in Asia/Tokyo, not the host local date.",
     )
     daily.add_argument("--max-lookback-business-days", default=10, type=int)
-    # Accepted but unused by run-daily: the daily wrapper forwards one shared
-    # arg list to both run-daily and audit, so run-daily must tolerate the
-    # audit-only flag rather than abort the whole job on an unknown argument.
-    daily.add_argument("--window-business-days", default=None, type=int, help=argparse.SUPPRESS)
+    _accept_audit_only_flags_forwarded_by_the_daily_wrapper(daily)
 
     audit = sub.add_parser(
         "audit",
@@ -825,15 +814,21 @@ def cli_error_exit_code(exc: BaseException) -> int:
     if isinstance(exc, (RuntimeError, NoDataFetchedError)):
         return 1
     if isinstance(exc, Exception) and _error_status(exc) in _AUTH_STATUSES:
-        # A wrong or expired key needs a config fix; re-running cannot help.
         return 2
-    # Only consult libraries that are already loaded: an exception of a type
-    # from a module that was never imported cannot be this one.
-    for module_name, class_name in (("requests", "RequestException"), ("pyarrow", "ArrowException")):
+    if _is_run_failure_from_an_already_imported_library(exc):
+        return 1
+    return 2
+
+
+_RUN_FAILURE_EXCEPTION_CLASSES = (("requests", "RequestException"), ("pyarrow", "ArrowException"))
+
+
+def _is_run_failure_from_an_already_imported_library(exc: BaseException) -> bool:
+    for module_name, class_name in _RUN_FAILURE_EXCEPTION_CLASSES:
         error_class = getattr(sys.modules.get(module_name), class_name, None)
         if isinstance(error_class, type) and isinstance(exc, error_class):
-            return 1
-    return 2
+            return True
+    return False
 
 
 def main() -> None:
@@ -842,8 +837,6 @@ def main() -> None:
     try:
         _dispatch(args)
     except (ValueError, OSError, RuntimeError) as exc:
-        # One line on stderr instead of a traceback; the exit code separates
-        # user errors (2) from failed runs (1), see cli_error_exit_code.
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(cli_error_exit_code(exc)) from None
     finally:
@@ -919,8 +912,6 @@ def _dispatch(args: argparse.Namespace) -> None:
                 max_lookback_business_days=args.max_lookback_business_days,
             )
         except ExactCalendarRequired as exc:
-            # Distinct from a gap: the audit could not run at all. rc=2 lets the
-            # daily wrapper alert on "calendar" instead of a phantom data gap.
             print(f"Audit failed: XTKS trading calendar unavailable: {exc}", file=sys.stderr)
             raise SystemExit(2) from exc
         try:
@@ -931,8 +922,6 @@ def _dispatch(args: argparse.Namespace) -> None:
                 run_started_at=os.environ.get("JQQLIB_RUN_STARTED_AT", ""),
             )
         except OSError as exc:
-            # The sidecar is a monitoring artifact; its absence already reads as
-            # `audit: not_run` downstream and must not fail the import.
             print(f"Warning: could not write the audit sidecar {sidecar_path}: {exc}", file=sys.stderr)
         if result.suppressed_non_sessions:
             print("suppressed (XTKS non-session):")

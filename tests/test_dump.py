@@ -246,6 +246,30 @@ class ParquetToQlibPruneTests(unittest.TestCase):
             self.assertTrue((qlib_dir / "instruments" / "all.txt").exists())
             self.assertEqual(sorted(p.name for p in qlib_dir.iterdir()), ["calendars", "features", "instruments"])
 
+    def test_failed_restore_after_an_interrupt_keeps_the_backup_recoverable(self) -> None:
+        original_rename = Path.rename
+
+        def interrupt_install_then_fail_restore(self: Path, target):
+            if self.name == "calendars" and ".qlib_build_" in str(self):
+                raise KeyboardInterrupt
+            if self.name == "features" and ".qlib_generated_backup_" in str(self):
+                raise OSError(errno.EIO, "restore failed")
+            return original_rename(self, target)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            parquet_path = root / "daily_quotes.parquet"
+            qlib_dir = root / "qlib_jp"
+            _seed_generated_tree(qlib_dir)
+            _dataset(["10010"]).to_parquet(parquet_path, index=False)
+
+            with mock.patch.object(Path, "rename", interrupt_install_then_fail_restore), self.assertRaises(OSError):
+                parquet_to_qlib(parquet_path, qlib_dir)
+
+            backup_roots = list(qlib_dir.glob(".qlib_generated_backup_*"))
+            self.assertEqual(len(backup_roots), 1)
+            self.assertEqual((backup_roots[0] / "features" / "99990" / "open.day.bin").read_bytes(), b"stale")
+
     def test_symlinked_qlib_dir_on_another_filesystem_is_staged_beside_its_target(self) -> None:
         # A published provider is a symlink that may point at another filesystem.
         # Simulate that boundary: renames between the two roots fail with EXDEV.

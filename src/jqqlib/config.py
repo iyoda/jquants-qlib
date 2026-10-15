@@ -43,8 +43,6 @@ def load_config(path: Path) -> dict:
         if key not in storage:
             raise ValueError(f"storage.{key} is required.")
     storage.setdefault("audit_dir", "./data/audit")
-    # Keep relative paths relative to the process working directory, matching
-    # the existing parquet_dir and qlib_dir consumers.
     for key in ("parquet_dir", "qlib_dir", "audit_dir"):
         value = storage[key]
         if not isinstance(value, str) or not value.strip() or "\x00" in value:

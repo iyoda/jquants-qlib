@@ -56,6 +56,7 @@ coverage run -m unittest discover -s tests && coverage report
 - Keep the pipeline deterministic: identical inputs must produce byte-identical Parquet and the same `lineage.parquet_sha256`.
 - Changes to `dataset_manifest.json` / `dataset_quality_report.json` must keep `src/jqqlib/contracts/*.schema.json` in sync with the code. `tests/test_contracts_package.py` checks the packaged schemas load, and `tests/test_manifest.py` validates a generated manifest against them; update both when the schema changes. Bump `schema_version` for breaking changes.
 - Add or update a unittest for every behaviour change. The suite is `unittest`, not pytest.
+- No `#` comments in `src/jqqlib/` or `scripts/`: state intent through names (functions, constants, variables) and pin the *why* with a test whose name says it. The only exceptions are a shebang on line 1 and tool directives in their exact form: a bare `# pragma: no cover`, `# type: ignore[<code>]  # <reason>`, and `# noqa: <CODE>` with no trailing text; `tests/test_source_comments.py` enforces this. Docstrings remain the place for public API contracts. Background that neither a name nor a test can carry (why a design was chosen, what it avoids) goes in [docs/design-notes.md](docs/design-notes.md).
 - Keep pull requests focused. Describe *why* in the PR body and link the issue if one exists.
 - Target the `dev` branch (the repository default). `master` only receives release merges from
   `dev`; a merge into `master` triggers the release workflow (see [releasing](docs/releasing.md)).

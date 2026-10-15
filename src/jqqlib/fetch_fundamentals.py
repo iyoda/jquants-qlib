@@ -124,14 +124,9 @@ def fetch_fundamentals(
             jitter_sec=retry_jitter_sec,
             sleeper=sleeper,
         )
-        # Only recorded as attempted once the call actually returns (success or
-        # legitimate empty result) -- a raised exception means an unknown state,
-        # so it must remain eligible for retry on the next invocation.
         newly_attempted.add(code)
         if df is not None and not df.empty:
             df = df.copy()
-            # Ensure the join key is present/consistent regardless of what the
-            # API response echoes back, matching the behaviour validated during the fundamentals probe.
             df["Code"] = str(code)
             new_frames.append(df)
         if i % checkpoint_every == 0:

@@ -38,7 +38,6 @@ def _keychain_refresh_token_service() -> str:
     return os.getenv("JQQLIB_KEYCHAIN_REFRESH_TOKEN_SERVICE", "jquants-refresh-token")
 
 
-# Deliberately noisy escape hatch; see create_jquants_client docstring.
 _ALLOW_YAML_CREDENTIALS_ENV = "JQQLIB_ALLOW_YAML_CREDENTIALS"
 
 
@@ -101,11 +100,6 @@ def create_jquants_client(config: dict) -> Client | ClientV2:
     ``jquants.api_key`` / ``jquants.refresh_token`` in ``config.yaml`` to be
     used, in which case an ALERT is printed to stderr every time it fires.
     """
-    # jquantsapi (and transitively pandas) is imported lazily at each
-    # construction site below, not up front: the missing-credentials path must
-    # raise ValueError without paying for that import, so a caller that treats
-    # "no credentials" as a fast, sanitized no-op is not masked by an unrelated
-    # import failure.
     jq_conf = config.get("jquants", {})
     if not isinstance(jq_conf, dict):
         jq_conf = {}
@@ -161,12 +155,7 @@ def create_jquants_client(config: dict) -> Client | ClientV2:
     )
 
 
-# Status-less transient errors that are not already caught as
-# TimeoutError/ConnectionError/OSError but are still worth a bounded retry
-# (e.g. truncated/chunked responses, name-resolution blips, reset peers).
-# Authentication failures (401/403) are deliberately excluded: on the static
-# ClientV2 api-key path there is nothing to re-auth, so they must fail fast.
-_TRANSIENT_STATUSLESS_RE = re.compile(
+_TRANSIENT_NETWORK_MESSAGE_RE = re.compile(
     r"connection reset|connection aborted|chunked|incomplete read|"
     r"temporarily unavailable|temporary failure in name resolution|"
     r"timed out|read timed out|eof occurred|broken pipe|"
@@ -190,11 +179,25 @@ def _is_transient_statusless(error: Exception) -> bool:
     """True for status-less errors that look like a transient network blip.
 
     Note: connection/timeout errors from requests subclass OSError and are
-    already handled by the typed check in call_jquants_with_retry;
+    already handled by the typed check in ``_is_transient``;
     this fuzzy message match only covers the residual status-less cases that
     carry no usable type or status_code.
     """
-    return bool(_TRANSIENT_STATUSLESS_RE.search(str(error)))
+    return bool(_TRANSIENT_NETWORK_MESSAGE_RE.search(str(error)))
+
+
+def _is_transient(
+    error: Exception,
+    *,
+    typed_transient_errors: tuple[type[BaseException], ...],
+    retry_statusless: bool,
+) -> bool:
+    status = _error_status(error)
+    if status is not None:
+        return status in _TRANSIENT_STATUSES
+    if isinstance(error, typed_transient_errors):
+        return True
+    return retry_statusless and _is_transient_statusless(error)
 
 
 def call_jquants_with_retry(
@@ -228,18 +231,8 @@ def call_jquants_with_retry(
         try:
             return api_call()
         except Exception as e:
-            # Classify by HTTP status first: requests.HTTPError subclasses
-            # OSError, so an OSError check ahead of this would retry 401/403/404.
-            status = _error_status(e)
-            if status is not None:
-                transient = status in _TRANSIENT_STATUSES
-            elif isinstance(e, (TimeoutError, ConnectionError, OSError, requests.exceptions.RetryError)):
-                transient = True
-            else:
-                # Status-less network blips that carry no usable type.
-                transient = retry_statusless and _is_transient_statusless(e)
-
-            if not transient:
+            typed_transient_errors = (TimeoutError, ConnectionError, OSError, requests.exceptions.RetryError)
+            if not _is_transient(e, typed_transient_errors=typed_transient_errors, retry_statusless=retry_statusless):
                 raise
             last_error = e
             if attempt >= retries:

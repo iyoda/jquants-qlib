@@ -183,6 +183,36 @@ class FetchFundamentalsResumeCacheTests(unittest.TestCase):
             self.assertEqual(client.calls, ["9999", "10010", "10020"])
             self.assertEqual(sorted(second["Code"].unique()), ["10010", "10020"])
 
+    def test_code_whose_request_raised_is_requested_again_on_resume(self) -> None:
+        class Client:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+                self.fail_codes = {"10020"}
+
+            def get_fin_summary(self, code: str) -> pd.DataFrame:
+                self.calls.append(code)
+                if code in self.fail_codes:
+                    raise ValueError("unknown outcome")
+                return pd.DataFrame({"DiscDate": ["2026-06-02"], "Eq": [1.0]})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / "fundamentals_raw_cache.parquet"
+            client = Client()
+            with self.assertRaises(ValueError):
+                fetch_fundamentals(
+                    client, ["10010", "10020"], request_interval_sec=0.0, sleeper=lambda _: None,
+                    cache_path=cache_path, checkpoint_every=1,
+                )
+
+            client.fail_codes.clear()
+            resumed = fetch_fundamentals(
+                client, ["10010", "10020"], request_interval_sec=0.0, sleeper=lambda _: None,
+                cache_path=cache_path,
+            )
+
+            self.assertEqual(client.calls, ["10010", "10020", "10020"])
+            self.assertEqual(sorted(resumed["Code"].unique()), ["10010", "10020"])
+
     def test_max_new_codes_bounds_a_single_invocation_and_resumes_later(self) -> None:
         class Client:
             def __init__(self) -> None:

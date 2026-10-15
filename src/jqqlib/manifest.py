@@ -422,8 +422,6 @@ def _build_quality_inspection(
     dumped_factor_invalid_rows = None
     dumped_factor_latest_not_one_symbols = None
     if adjustment == QLIB_ADJUSTMENT_VENDOR_FACTOR and not df.empty and set(QLIB_FIELDS).issubset(df.columns):
-        # vendor_factor promises a $factor series: a Parquet the factor cannot be
-        # computed from is a failed dataset, not one that skips the check.
         dumped = None
         try:
             dumped = apply_vendor_adjustment(df)
@@ -672,7 +670,6 @@ def _dataset_manifest_payload(
         "rows": int(len(df)),
         "instruments": int(df["symbol"].nunique()),
         "parquet_sha256": parquet_sha256,
-        # The same Parquet dumped with another qlib.adjustment is another dataset.
         "adjustment": adjustment,
         "source": source,
     }
@@ -784,8 +781,6 @@ def write_dataset_artifacts(
     source: dict[str, Any],
     adjustment: str = DEFAULT_QLIB_ADJUSTMENT,
 ) -> tuple[Path, Path]:
-    # One read and one quality inspection serve both artifacts: the inspection
-    # runs the vendor-factor transform over the whole dataset.
     df = _read_dataset_parquet(parquet_path)
     quality = _build_quality_inspection(df, qlib_dir, adjustment=adjustment)
     manifest = _dataset_manifest_payload(
@@ -796,9 +791,12 @@ def write_dataset_artifacts(
         dataset_quality_report_path(qlib_dir),
         _quality_report_payload(quality, parquet_path=parquet_path, qlib_dir=qlib_dir, manifest=manifest),
     )
-    # Bind the quality decision into the manifest after the report is final.
+    _bind_final_quality_report_into_manifest(manifest, quality_path)
+    write_json_atomic(manifest_path, manifest)
+    return manifest_path, quality_path
+
+
+def _bind_final_quality_report_into_manifest(manifest: dict[str, Any], quality_path: Path) -> None:
     manifest["lineage"]["quality_report_sha256"] = _sha256_file(quality_path)
     manifest["lineage"].pop("manifest_sha256", None)
     manifest["lineage"]["manifest_sha256"] = _sha256_json(manifest)
-    write_json_atomic(manifest_path, manifest)
-    return manifest_path, quality_path

@@ -5,9 +5,10 @@ from pathlib import Path
 
 import pandas as pd
 import qlib
-from qlib.constant import REG_CN  # qlib has no JP region constant; REG_CN is the non-US default
+from qlib.constant import REG_CN
 from qlib.data import D
 
+QLIB_NON_US_REGION_FOR_JP_DATA = REG_CN
 DEFAULT_FIELDS = ["$open", "$high", "$low", "$close", "$volume", "$amount", "$factor"]
 
 
@@ -41,7 +42,12 @@ def main() -> None:
     args = parser.parse_args()
 
     provider_uri = Path(args.provider_uri).expanduser().resolve()
-    qlib.init(provider_uri=str(provider_uri), region=REG_CN, dataset_cache=None, expression_cache=None)
+    qlib.init(
+        provider_uri=str(provider_uri),
+        region=QLIB_NON_US_REGION_FOR_JP_DATA,
+        dataset_cache=None,
+        expression_cache=None,
+    )
 
     date = args.date
     if date is None:

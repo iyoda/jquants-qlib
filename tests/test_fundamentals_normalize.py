@@ -149,6 +149,16 @@ class NormalizeFundamentalsTests(unittest.TestCase):
 
                     self.assertEqual(panel.loc[("2026-06-04", "10010"), "NP"], 200.0)
 
+    def test_a_later_disc_time_outranks_an_earlier_keyed_one_even_without_disc_no(self) -> None:
+        rows = [
+            {"DiscTime": "16:00:00", "DiscNo": None, "NP": 300.0},
+            {"DiscTime": "15:00:00", "DiscNo": "2", "NP": 200.0},
+        ]
+        raw = pd.DataFrame([{"Code": "10010", "DiscDate": "2026-06-03", **row} for row in rows])
+        panel = normalize_fundamentals(raw, _calendar())
+
+        self.assertEqual(panel.loc[("2026-06-04", "10010"), "NP"], 300.0)
+
     def test_disc_no_beyond_float_precision_is_ordered_exactly(self) -> None:
         # 2**53 + 1 and 2**53 collide as floats; one row also has a missing DiscNo.
         rows = [

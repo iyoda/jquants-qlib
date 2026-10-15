@@ -12,8 +12,6 @@ if TYPE_CHECKING:
 
 DEFAULT_FUNDAMENTALS_PARQUET_FILENAME = "fundamentals_asof.parquet"
 DEFAULT_PIT_AUDIT_FILENAME = "fundamentals_pit_audit.json"
-# Raw per-code fetch cache -- lets a killed/restarted fetch resume instead of
-# re-spending already-paid-for API calls (fetch_fundamentals.cache_path).
 DEFAULT_RAW_CACHE_FILENAME = "fundamentals_raw_cache.parquet"
 
 

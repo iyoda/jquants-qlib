@@ -150,8 +150,6 @@ def main() -> None:
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(1) from None
     except (ValueError, OSError, RuntimeError) as exc:
-        # Same boundary as jqqlib.pipeline.main: configuration, credential and
-        # missing-input errors exit 2; API, data and runtime failures exit 1.
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(cli_error_exit_code(exc)) from None
 
