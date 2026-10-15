@@ -1,0 +1,17 @@
+pre-commit:
+  parallel: true
+  jobs:
+    - name: ruff
+      glob: "*.py"
+      run: ${JQQLIB_PYTHON:-.venv/bin/python} -m ruff check {staged_files}
+    - name: comments-and-docstrings
+      glob: "*.py"
+      run: ${JQQLIB_PYTHON:-.venv/bin/python} scripts/check_comments.py {staged_files}
+
+pre-push:
+  parallel: true
+  jobs:
+    - name: mypy
+      run: ${JQQLIB_PYTHON:-.venv/bin/python} -m mypy
+    - name: unittest
+      run: ${JQQLIB_PYTHON:-.venv/bin/python} -m unittest discover -s tests

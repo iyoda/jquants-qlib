@@ -9,12 +9,18 @@ Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -e ".[dev]"
+lefthook install
 python -m unittest discover -s tests
 jqqlib --help
 jqqlib --version
 ruff check .
 mypy
 ```
+
+`lefthook install` sets up the git hooks in `lefthook.yml`: on commit, `ruff check` and
+`scripts/check_comments.py` run on the staged Python files; on push, `mypy` and the unittest suite
+run. The hooks use `.venv/bin/python`; set `JQQLIB_PYTHON` to use another interpreter. Hooks can be
+skipped locally, so CI runs the same checks in the required `lint + type-check` job.
 
 `jqqlib` is the console script installed by the package; `python -m jqqlib` is equivalent.
 `jqqlib init-config [PATH]` writes the packaged example configuration (default `./config.yaml`,

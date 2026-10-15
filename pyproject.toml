@@ -44,6 +44,7 @@ dev = [
   "build>=1.2",
   "twine>=6.1",
   "coverage>=7.5",
+  "lefthook>=2.2",
   "pandas-stubs",
   "types-PyYAML",
   "types-requests",
