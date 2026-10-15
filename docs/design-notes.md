@@ -173,7 +173,9 @@ PIT の規則そのものは [財務](fundamentals.md#pitpoint-in-timeの意味)
 ## スクリプト（`scripts/`）
 
 - `check_comments.py`: CONTRIBUTING の規約を検査します。`src/jqqlib` と `scripts` の外のパスは無視するので、
-  lefthook がステージしたファイルの一覧をそのまま渡せます。
+  lefthook がステージしたファイルの一覧をそのまま渡せます。シンボリックリンクは、管轄かどうかと読み取りには
+  リンク先の実体を、拡張子と公開 API の判定には import されるときのパスを使います（`governed_relative_path`）。
+  読めないファイルは traceback ではなく違反として報告します。
 - `check_qlib.py`: Qlib には JP のリージョン定数が無いので、US 以外の既定の `REG_CN` を使います
   （`QLIB_NON_US_REGION_FOR_JP_DATA`）。
 - `dist_smoke.py`: リポジトリの外から、`PYTHONPATH` をチェックアウトに向けずに実行し（手順は

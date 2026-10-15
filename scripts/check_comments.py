@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import ast
 import io
+import os
 import re
 import sys
 import tokenize
@@ -67,29 +68,47 @@ def docstrings_outside_public_api(source: str, *, public_api_module: bool) -> li
     return found
 
 
-def governed_python_files(paths: Iterable[Path], *, root: Path) -> list[Path]:
-    governed_roots = [(root / governed).resolve() for governed in COMMENT_FREE_ROOTS]
-    files: set[Path] = set()
+def governed_relative_path(candidate: Path, *, logical_root: Path, root: Path) -> Path | None:
+    if candidate.suffix != ".py":
+        return None
+    logical_relative = Path(os.path.relpath(candidate, logical_root))
+    try:
+        real = candidate.resolve()
+    except (OSError, RuntimeError):
+        is_governed = any(logical_relative.is_relative_to(governed) for governed in COMMENT_FREE_ROOTS)
+        return logical_relative if is_governed else None
+    if not real.is_file():
+        return None
+    for governed in COMMENT_FREE_ROOTS:
+        real_governed = (root / governed).resolve()
+        if real.is_relative_to(real_governed):
+            if logical_relative.is_relative_to(governed):
+                return logical_relative
+            return governed / real.relative_to(real_governed)
+    return None
+
+
+def governed_python_files(paths: Iterable[Path], *, root: Path) -> list[tuple[Path, Path]]:
+    logical_root = Path(os.path.abspath(root))
+    files: dict[Path, Path] = {}
     for path in paths:
-        absolute = (path if path.is_absolute() else Path.cwd() / path).resolve()
-        candidates = sorted(absolute.rglob("*.py")) if absolute.is_dir() else [absolute]
-        for candidate in (found.resolve() for found in candidates):
-            is_governed = any(candidate.is_relative_to(governed) for governed in governed_roots)
-            if candidate.suffix == ".py" and candidate.is_file() and is_governed:
-                files.add(candidate)
-    return sorted(files)
+        logical = Path(os.path.abspath(path))
+        candidates = sorted(logical.rglob("*.py")) if logical.is_dir() else [logical]
+        for candidate in candidates:
+            relative = governed_relative_path(candidate, logical_root=logical_root, root=root)
+            if relative is not None:
+                files.setdefault(relative, candidate)
+    return sorted(files.items())
 
 
 def violations(paths: Iterable[Path], *, root: Path = REPO_ROOT) -> list[str]:
-    resolved_root = root.resolve()
     found = []
-    for path in governed_python_files(paths, root=resolved_root):
-        relative = path.relative_to(resolved_root)
+    for relative, path in governed_python_files(paths, root=root):
         try:
             source = path.read_text(encoding="utf-8")
             comments = explanatory_comments(source)
             docstrings = docstrings_outside_public_api(source, public_api_module=is_public_api_module(relative))
-        except (UnicodeDecodeError, SyntaxError, tokenize.TokenError) as exc:
+        except (OSError, ValueError, SyntaxError, tokenize.TokenError) as exc:
             found.append(f"{relative}: cannot be checked: {type(exc).__name__}: {exc}")
             continue
         found.extend(f"{relative}:{line}: comment {comment!r}" for line, comment in comments)

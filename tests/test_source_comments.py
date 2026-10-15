@@ -106,14 +106,59 @@ class CommandLineTests(unittest.TestCase):
 
     def test_a_file_that_cannot_be_parsed_is_reported_instead_of_crashing(self) -> None:
         self._write("src/jqqlib/broken.py", "def broken(:\n")
+        self._write("src/jqqlib/null_byte.py", "x = 1\x00\n")
         (self.root / "scripts").mkdir()
         (self.root / "scripts" / "latin1.py").write_bytes(b"x = '\xe9'\n")
+        loop = self.root / "scripts" / "loop.py"
+        os.symlink(loop, loop)
 
         code, stderr = self._run()
 
         self.assertEqual(code, 1)
         self.assertIn("src/jqqlib/broken.py: cannot be checked:", stderr)
+        self.assertIn("src/jqqlib/null_byte.py: cannot be checked:", stderr)
         self.assertIn("scripts/latin1.py: cannot be checked: UnicodeDecodeError", stderr)
+        self.assertIn("scripts/loop.py: cannot be checked:", stderr)
+
+    @unittest.skipIf(os.geteuid() == 0, "root can read a file without read permission")
+    def test_an_unreadable_file_is_reported_instead_of_crashing(self) -> None:
+        unreadable = self._write("scripts/secret.py", "x = 1\n")
+        unreadable.chmod(0)
+        self.addCleanup(unreadable.chmod, 0o644)
+
+        code, stderr = self._run(unreadable)
+
+        self.assertEqual(code, 1)
+        self.assertIn("scripts/secret.py: cannot be checked: PermissionError", stderr)
+
+    def test_a_python_named_symlink_is_checked_whatever_its_target_is_called(self) -> None:
+        self._write("src/jqqlib/notes.txt", "x = 1  # hidden behind a .txt target\n")
+        os.symlink(self.root / "src/jqqlib/notes.txt", self.root / "src/jqqlib/alias.py")
+
+        code, stderr = self._run()
+
+        self.assertEqual(code, 1)
+        self.assertIn("src/jqqlib/alias.py:1: comment", stderr)
+
+    def test_public_api_is_judged_by_the_path_the_module_is_imported_from(self) -> None:
+        self._write("src/jqqlib/_impl.py", 'def helper():\n    """Doc."""\n')
+        public = self.root / "src/jqqlib/public.py"
+        os.symlink(self.root / "src/jqqlib/_impl.py", public)
+
+        self.assertEqual(self._run(public), (0, ""))
+        self.assertIn("src/jqqlib/_impl.py:2: docstring on helper", self._run()[1])
+
+    def test_a_package_directory_symlinked_out_of_the_repository_is_still_checked_as_the_package(self) -> None:
+        elsewhere = tempfile.TemporaryDirectory()
+        self.addCleanup(elsewhere.cleanup)
+        Path(elsewhere.name, "api.py").write_text('def api():\n    """Doc."""\n    return 1  # why\n', encoding="utf-8")
+        (self.root / "src").mkdir()
+        os.symlink(elsewhere.name, self.root / "src/jqqlib")
+
+        code, stderr = self._run()
+
+        self.assertEqual(code, 1)
+        self.assertEqual(stderr.splitlines(), ["src/jqqlib/api.py:3: comment '# why'"])
 
     def test_paths_outside_the_governed_trees_are_ignored(self) -> None:
         outside = self._write("tests/test_anything.py", "x = 1  # a test may explain itself\n")
