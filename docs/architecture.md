@@ -40,10 +40,11 @@ Qlib の `$factor` と調整済み価格・出来高を出します。配当は�
 - `qlib_dump.py`: bin / calendar / instruments の書き込み。microsoft/qlib `scripts/dump_bin.py` からの適応
 - `manifest.py`: bootstrap CSV source manifest、dataset manifest、quality report
 - `publish.py`: 準備済みproviderへのatomic symlink publish
+- `ledger.py`: publish 台帳（JSON Lines）の読み・初期化・追記。`publish_check.baseline: file` の比較基準
 - `pipeline.py`: CLI と orchestration、`init-config`、ユーザーエラーの exit 2 変換
 - `__main__.py`: `python -m jqqlib` を `pipeline.main` に委譲
 - `audit.py` / `trading_calendar.py`: XTKS 営業日と欠損を照合し監査結果を保存
-- `config.py`: YAML 読み込みと設定検証（任意キー `qlib.adjustment`: `vendor_factor` / `none`）
+- `config.py`: YAML 読み込みと設定検証（任意キー `qlib.adjustment`: `vendor_factor` / `none`、`publish_check.baseline`: `git` / `file`）
 - `src/jqqlib/contracts/`: JSON schema を同梱し `jqqlib.contracts.load_schema` で提供
 - `src/jqqlib/data/config.example.yaml`: `init-config` が書き出す設定例（ルートの `config.example.yaml` と同一内容）
 

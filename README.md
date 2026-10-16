@@ -166,7 +166,8 @@ Python 3.10–3.12（[.tool-versions](.tool-versions) は 3.12）。macOS / Linu
 | `audit` | 直近営業日の欠損監査 |
 | `publish` | 準備済み provider の symlink 切替 |
 | `publish-paths` | Parquet / manifest / quality report のパスを出力 |
-| `publish-check` | 運用リポジトリの `publish_check.git_ref`（既定 `origin/main`）と比較（変更なし exit 3） |
+| `publish-check` | 比較基準と比べる（既定は運用リポジトリの `publish_check.git_ref`＝`origin/main`、`publish_check.baseline: file` なら台帳。変更なし exit 3） |
+| `ledger init` / `ledger append` | publish 台帳（`publish_check.ledger_path`）を一度だけ作る／publish 後に記録する |
 | `fundamentals_pipeline`（実験的） | 株価 CLI とは別 module の財務データ ETL（PIT パネル）。`python -m jqqlib.fundamentals_pipeline --help` |
 
 設定ファイルや引数の誤りは `error: <message>`（stderr）と exit 2 で終了し、traceback は出ません。
