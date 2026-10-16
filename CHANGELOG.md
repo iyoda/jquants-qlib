@@ -6,6 +6,21 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
 
 ## [Unreleased]
 
+### Added
+
+- `publish_check.baseline: file` compares `publish-check` against the last entry of a JSON Lines
+  publish ledger at `publish_check.ledger_path` instead of the manifest committed on `git_ref`, so
+  an operations repository no longer has to commit and push the manifest. The default stays `git`;
+  one baseline is never a fallback for the other. A missing or damaged ledger is an error (exit 1),
+  not a first publish; an empty ledger is.
+- `jqqlib ledger init [--from-manifest PATH]` creates the ledger once (empty, or seeded from a
+  manifest such as the last one published by the git baseline), and `jqqlib ledger append` records
+  the current dataset after a successful publish. `append` runs the `publish-check` dataset checks,
+  rewrites the ledger atomically under a lock and appends nothing when the last entry already
+  records the dataset. Entries carry `jqqlib_version` and, when the package is the `src/jqqlib`
+  directory of a jquants-qlib work tree, `jqqlib_source_commit`; neither takes part in the change
+  decision. Symlinked ledgers and entries with missing fields are refused.
+
 ### Fixed
 
 - API retries no longer repeat 4xx client errors: `requests.HTTPError` subclasses `OSError`, so

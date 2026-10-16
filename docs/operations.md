@@ -189,6 +189,48 @@ jqqlib publish-paths --config config.yaml | grep -E 'dataset_(manifest|quality_r
 同じ入力から Parquet と Qlib dataset を決定的に再生成します（`lineage.parquet_sha256` で
 同一性を検証できます）。障害別の手順は[障害復旧](#障害復旧)にまとめています。
 
+#### 台帳ファイルを比較基準にする
+
+manifest を git に commit・push せずに済ませたい場合（運用リポジトリを公開する、毎日の push をやめる）は、
+比較基準を git から台帳ファイルに切り替えます。台帳は publish した dataset を 1 行 1 件で記録する
+JSON Lines で、`data/` と同じく git 管理しません。
+
+```yaml
+publish_check:
+  baseline: file
+  ledger_path: "./data/state/publish_ledger.jsonl"
+```
+
+```bash
+# 一度だけ、次のどちらかで台帳を作る
+# (a) 新しく始める: 空の台帳（次の publish-check は初回 publish として exit 0）
+jqqlib ledger init --config config.yaml
+# (b) git の比較基準から移る: 最後に push した manifest を 1 行目にする（次の publish-check は exit 3）
+git show origin/main:data/qlib_jp/dataset_manifest.json > /tmp/last_manifest.json
+jqqlib ledger init --config config.yaml --from-manifest /tmp/last_manifest.json
+
+# 日次: publish-check が exit 0 のとき、publish（バックアップなど）が済んでから記録する
+jqqlib publish-check --config config.yaml
+jqqlib ledger append --config config.yaml
+```
+
+- `publish-check` は台帳の末尾の行と `lineage.parquet_sha256`・`adjustment_policy` を比べます。行が 0 の台帳は
+  初回 publish（exit 0）ですが、台帳が**無い**・読めない・symlink である・途中の行も含めて JSON として壊れているか
+  項目が欠けている・最後が改行で終わらない場合は exit 1 です。パスの誤りや壊れたファイルで比較基準を失わないよう、
+  git のときの「無ければ初回」とは扱いを変えています。台帳が使えなくても git には切り替えません。
+- `ledger append` は `publish-check` と同じ検査（manifest と quality report の整合、`fail` でない）を通った
+  dataset だけを記録します。末尾の行と同じ dataset なら何も書かずに exit 0 なので、途中で止まった日次処理を
+  再実行しても行は重なりません。書き込みは `<ledger_path>.lock` の排他ロックの下で一時ファイルに全文を書いて
+  rename します。rename の前に止まれば前の台帳が、後なら新しい台帳がそのまま残り、書きかけの台帳は残りません
+  （rename の後でディレクトリの fsync が失敗すると、新しい台帳が残ったままエラー（exit 1）になります。append なら
+  再実行すれば「既に記録済み」で exit 0 になります。init なら再実行は「既にある」で exit 2 になるので、
+  中身を確かめてからそのまま使ってください）。
+- 各行には `build_id`・`dataset_id`・`generated_at`・`date_end`・`quality_status` と、記録した jqqlib の
+  `jqqlib_version`・`jqqlib_source_commit`（パッケージが jquants-qlib の作業ツリーの `src/jqqlib` にあるときだけ。
+  wheel では null）が入ります。この 2 つは記録だけで、変更の判定には使いません。`--from-manifest` で入れた行では
+  両方 null です。
+- 台帳もデータと同じく、自分でバックアップしてください（`.lock` は不要です）。
+
 ### 4) Atomic publish
 
 既存 provider を直接上書きせず、build 済み dataset へ symlink を原子的に切り替えたい場合は `publish` を使います。
@@ -330,7 +372,7 @@ Parquet と Qlib dataset は同じ入力から決定的に再生成できます
 | exit | 意味 | 主なコマンド |
 | --- | --- | --- |
 | 0 | 成功（`publish-check` は「内容が変わった」） | 全コマンド |
-| 1 | 検査で問題を検出（`validate` の品質エラー、`audit` の欠損、`publish-check` の manifest 異常や git 参照の失敗）、dataset 状態の異常（Qlib-ready でないデータ、Qlib dump が provider subtree を作らなかった、Parquet が読めない）、または実行時の失敗（J-Quants API・通信エラー、lookback 内にデータが無い、財務データが取得できない） | `validate` / `audit` / `publish-check` ほか取得・変換系コマンド |
+| 1 | 検査で問題を検出（`validate` の品質エラー、`audit` の欠損、`publish-check` の manifest 異常や git 参照・台帳の失敗、`ledger append` が dataset を拒否・台帳が無いか壊れている）、dataset 状態の異常（Qlib-ready でないデータ、Qlib dump が provider subtree を作らなかった、Parquet が読めない）、または実行時の失敗（J-Quants API・通信エラー、lookback 内にデータが無い、財務データが取得できない） | `validate` / `audit` / `publish-check` / `ledger` ほか取得・変換系コマンド |
 | 2 | ユーザー側の誤り（設定ファイルが無い・必須キー不足・値が不正・`init-config` の上書き拒否・`publish` の build ディレクトリ不在／実ディレクトリの置換拒否、API キーが拒否された HTTP 401/403）。それ以外の API・通信エラーは含みません。`error: <message>` を stderr に出し traceback は出しません。`run-daily` / `audit` の XTKS カレンダー不可（`... XTKS trading calendar unavailable: ...`、監査未実施）も exit 2 | 全コマンド |
 | 3 | `publish-check` で変更なし（失敗ではない） | `publish-check` |
 
@@ -365,6 +407,13 @@ argparse の usage メッセージが出ます。
   `cannot read the committed manifest: ...` は比較先を引けない状態です（`git` が無い、git の作業ツリー外、
   `publish_check.git_ref` が commit を指さない＝未 fetch や誤記、manifest が作業ツリー外）。
   初回 publish の前でも `git_ref` は存在する必要があるので、先に空の初期 commit を push しておきます。
+- `publish_check.baseline: file` で `publish ledger missing` なら台帳が作られていないか、`ledger_path` が
+  誤っています。新しく始めるなら `jqqlib ledger init`、移行なら `--from-manifest` で作ります。
+  `line N ...` や `does not end with a newline` は台帳が壊れているので、バックアップから戻すか、壊れた行を
+  確かめてから直します。`is a symlink` は `ledger_path` を実体のファイルに向け直します。どちらも publish は
+  止まったままなので、黙って作り直さないでください。
+  `ledger init` は既存の台帳を上書きしません（exit 2）。`--from-manifest` の manifest が読めない・JSON でない・
+  `lineage.parquet_sha256` か `adjustment_policy` が無い場合も exit 2 で、台帳は作られません。
 
 ### 監査 sidecar（`last_audit.json`）が無い・古いとき
 

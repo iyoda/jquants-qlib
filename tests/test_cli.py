@@ -69,7 +69,7 @@ class CliTests(unittest.TestCase):
 
     def test_all_subcommand_help(self):
         commands = ("init-config", "run-etl", "convert", "validate", "bootstrap-csv", "download-csv",
-                    "run-all", "run-daily", "audit", "publish-check", "publish", "publish-paths")
+                    "run-all", "run-daily", "audit", "publish-check", "ledger", "publish", "publish-paths")
         for command in ("", *commands):
             with self.subTest(command=command):
                 code, stdout, _ = self.invoke(*([command] if command else []), "--help")

@@ -11,7 +11,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib.resources import files as resource_files
 from pathlib import Path
 from typing import Any
@@ -19,9 +19,25 @@ from zoneinfo import ZoneInfo
 
 from . import __version__
 from .audit import GapAuditResult, audit_dataset_gaps, write_audit_sidecar
-from .config import QLIB_ADJUSTMENT_VENDOR_FACTOR, load_config, publish_check_git_ref, qlib_adjustment
+from .config import (
+    PUBLISH_CHECK_BASELINE_FILE,
+    QLIB_ADJUSTMENT_VENDOR_FACTOR,
+    load_config,
+    publish_check_baseline,
+    publish_check_git_ref,
+    publish_check_ledger_path,
+    qlib_adjustment,
+)
 from .dump import parquet_to_qlib
 from .fetch import _error_status, create_jquants_client, fetch_bulk_daily_quotes, fetch_daily_quotes
+from .ledger import (
+    LedgerError,
+    append_ledger_entry,
+    init_ledger,
+    jqqlib_source_commit,
+    ledger_entry_from_manifest,
+    read_ledger,
+)
 from .manifest import (
     DATASET_MANIFEST_FILENAME,
     DATASET_QUALITY_REPORT_FILENAME,
@@ -382,9 +398,10 @@ def decide_publish(current_hash: str | None, committed_hash: str | None) -> bool
     """Decide whether the dataset content changed and should be published.
 
     Compares the content-only ``lineage.parquet_sha256`` of the freshly built
-    dataset against what is committed on the configured ``publish_check.git_ref``
-    (default ``origin/main``); ``evaluate_publish_check`` also compares the
-    manifests' ``adjustment_policy``. This is independent of
+    dataset against the baseline: the manifest committed on
+    ``publish_check.git_ref`` (default ``origin/main``) or the last entry of the
+    publish ledger (``publish_check.baseline: file``); ``evaluate_publish_check``
+    also compares the ``adjustment_policy``. This is independent of
     the per-run fetch window and of all manifest timestamps, so identical data
     never triggers a publish. A missing committed hash (first publish) counts as
     changed.
@@ -399,7 +416,8 @@ class PublishCheckDecision:
     """Outcome of ``publish-check``.
 
     ``returncode`` is 0 when the dataset changed, 3 when it is unchanged and 1 on an error; ``reason`` and the
-    remaining fields explain the decision.
+    remaining fields explain the decision. ``baseline`` is ``git`` or ``file``; ``ledger_path`` is set only for
+    ``file``.
     """
 
     returncode: int
@@ -409,6 +427,15 @@ class PublishCheckDecision:
     quality_status: str | None = None
     warning_summary: str | None = None
     git_ref: str = "origin/main"
+    baseline: str = "git"
+    ledger_path: str | None = None
+
+    @property
+    def compared_against(self) -> str:
+        """Name the baseline for messages: the git ref, or ``ledger <path>`` for the file baseline."""
+        if self.baseline == PUBLISH_CHECK_BASELINE_FILE:
+            return f"ledger {self.ledger_path}"
+        return self.git_ref
 
 
 def _manifest_path(config: dict) -> Path:
@@ -537,17 +564,15 @@ def _publish_check_error(
     )
 
 
-def evaluate_publish_check(config_path: Path) -> PublishCheckDecision:
-    """Compare the working-tree dataset manifest with the one committed on ``publish_check.git_ref``.
+@dataclass(frozen=True)
+class _PublishableDataset:
+    manifest: dict[str, Any]
+    report: dict[str, Any]
+    current_hash: str
+    status: str
 
-    Fails closed with ``returncode`` 1 when the manifest or the quality report is missing, unreadable or not a JSON
-    object, the manifest lacks ``lineage.parquet_sha256``, a status is unknown or ``fail``, the two disagree on
-    status or ``dataset_id``, or the git lookup cannot run (no git, not a work tree, unknown ref, a manifest outside
-    the work tree). A committed
-    manifest that is absent or not valid JSON counts as a first publish (``returncode`` 0).
-    """
-    config = load_config(config_path)
 
+def _check_current_dataset(config: dict) -> _PublishableDataset | PublishCheckDecision:
     manifest, reason = _read_json_object(_manifest_path(config), "dataset manifest")
     if reason is not None or manifest is None:
         return _publish_check_error(reason or "dataset manifest unavailable")
@@ -602,19 +627,47 @@ def evaluate_publish_check(config_path: Path) -> PublishCheckDecision:
             quality_status=str(report_status),
         )
 
+    return _PublishableDataset(manifest=manifest, report=report, current_hash=current, status=str(report_status))
+
+
+def evaluate_publish_check(config_path: Path) -> PublishCheckDecision:
+    """Compare the working-tree dataset manifest with the configured baseline.
+
+    The baseline is the manifest committed on ``publish_check.git_ref`` (``publish_check.baseline: git``, the
+    default) or the last entry of the ledger at ``publish_check.ledger_path`` (``file``); one is never a fallback
+    for the other. Fails closed with ``returncode`` 1 when the manifest or the quality report is missing,
+    unreadable or not a JSON object, the manifest lacks ``lineage.parquet_sha256``, a status is unknown or
+    ``fail``, the two disagree on status or ``dataset_id``, the git lookup cannot run (no git, not a work tree,
+    unknown ref, a manifest outside the work tree) or the ledger is missing or damaged. A committed manifest that
+    is absent or not valid JSON, or a ledger without entries, counts as a first publish (``returncode`` 0).
+    """
+    config = load_config(config_path)
+    return _with_configured_baseline(_decide_publish_check(config), config)
+
+
+def _with_configured_baseline(decision: PublishCheckDecision, config: dict) -> PublishCheckDecision:
+    return replace(
+        decision,
+        git_ref=publish_check_git_ref(config),
+        baseline=publish_check_baseline(config),
+        ledger_path=_configured_ledger_path(config),
+    )
+
+
+def _decide_publish_check(config: dict) -> PublishCheckDecision:
+    dataset = _check_current_dataset(config)
+    if isinstance(dataset, PublishCheckDecision):
+        return dataset
+    manifest, current, report_status = dataset.manifest, dataset.current_hash, dataset.status
+
     try:
-        committed_manifest = _committed_manifest(config)
-    except _CommittedManifestLookupFailed as exc:
-        return _publish_check_error(
-            f"cannot read the committed manifest: {exc}",
-            current_hash=current,
-            quality_status=str(report_status),
-        )
-    committed_lineage = committed_manifest.get("lineage", {}) if committed_manifest else {}
-    committed = committed_lineage.get("parquet_sha256") if isinstance(committed_lineage, dict) else None
-    warning_summary = _quality_warning_summary(report)
-    adjustment_policy_changed = committed_manifest is not None and (
-        manifest.get("adjustment_policy") != committed_manifest.get("adjustment_policy")
+        baseline_record = _baseline_for_publish_check(config)
+    except (_CommittedManifestLookupFailed, LedgerError) as exc:
+        return _publish_check_error(str(exc), current_hash=current, quality_status=report_status)
+    committed = baseline_record.parquet_sha256 if baseline_record else None
+    warning_summary = _quality_warning_summary(dataset.report)
+    adjustment_policy_changed = baseline_record is not None and (
+        manifest.get("adjustment_policy") != baseline_record.adjustment_policy
     )
     changed = decide_publish(current, committed) or adjustment_policy_changed
     return PublishCheckDecision(
@@ -622,10 +675,83 @@ def evaluate_publish_check(config_path: Path) -> PublishCheckDecision:
         reason="changed" if changed else "unchanged",
         current_hash=current,
         committed_hash=committed,
-        git_ref=publish_check_git_ref(config),
-        quality_status=str(report_status),
+        quality_status=report_status,
         warning_summary=warning_summary,
     )
+
+
+def append_current_dataset_to_ledger(config_path: Path) -> tuple[Path, bool]:
+    """Record the working-tree dataset in the publish ledger at ``publish_check.ledger_path``.
+
+    Runs the same dataset checks as ``publish-check`` first and raises ``LedgerError`` when they refuse the
+    dataset or the ledger is missing or damaged. Returns the ledger path and whether an entry was appended:
+    ``False`` when the last entry already records this dataset, so a re-run after a completed append is a no-op.
+    """
+    config = load_config(config_path)
+    path = publish_check_ledger_path(config)
+    dataset = _check_current_dataset(config)
+    if isinstance(dataset, PublishCheckDecision):
+        raise LedgerError(f"refusing to record the dataset in the publish ledger: {dataset.reason}")
+    entry = ledger_entry_from_manifest(
+        dataset.manifest,
+        jqqlib_version=__version__,
+        jqqlib_source_commit=jqqlib_source_commit(),
+    )
+    return path, append_ledger_entry(path, entry)
+
+
+def init_publish_ledger(config_path: Path, from_manifest: Path | None = None) -> Path:
+    """Create the publish ledger at ``publish_check.ledger_path``, empty or seeded from ``from_manifest``.
+
+    A seeded entry records no producer versions because the manifest does not say which jqqlib built it. Raises
+    ``FileExistsError`` when the ledger exists, ``OSError`` for an unreadable manifest, ``ValueError`` for a
+    manifest that is not a JSON object or cannot become an entry (no ``lineage.parquet_sha256``, no object
+    ``adjustment_policy``) and ``LedgerError`` when the ledger cannot be written.
+    """
+    config = load_config(config_path)
+    path = publish_check_ledger_path(config)
+    entry = None
+    if from_manifest is not None:
+        try:
+            manifest = json.loads(from_manifest.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"manifest {from_manifest} is not JSON: {exc}") from exc
+        if not isinstance(manifest, dict):
+            raise ValueError(f"manifest {from_manifest} is not a JSON object")
+        try:
+            entry = ledger_entry_from_manifest(manifest, jqqlib_version=None, jqqlib_source_commit=None)
+        except LedgerError as exc:
+            raise ValueError(f"manifest {from_manifest} cannot seed the publish ledger: {exc}") from exc
+    return init_ledger(path, entry)
+
+
+@dataclass(frozen=True)
+class _Baseline:
+    parquet_sha256: str | None
+    adjustment_policy: Any
+
+
+def _configured_ledger_path(config: dict) -> str | None:
+    if publish_check_baseline(config) != PUBLISH_CHECK_BASELINE_FILE:
+        return None
+    return str(publish_check_ledger_path(config))
+
+
+def _baseline_for_publish_check(config: dict) -> _Baseline | None:
+    if publish_check_baseline(config) == PUBLISH_CHECK_BASELINE_FILE:
+        entries = read_ledger(publish_check_ledger_path(config))
+        if not entries:
+            return None
+        return _Baseline(entries[-1]["parquet_sha256"], entries[-1].get("adjustment_policy"))
+    try:
+        committed_manifest = _committed_manifest(config)
+    except _CommittedManifestLookupFailed as exc:
+        raise _CommittedManifestLookupFailed(f"cannot read the committed manifest: {exc}") from exc
+    if committed_manifest is None:
+        return None
+    committed_lineage = committed_manifest.get("lineage", {})
+    committed = committed_lineage.get("parquet_sha256") if isinstance(committed_lineage, dict) else None
+    return _Baseline(committed, committed_manifest.get("adjustment_policy"))
 
 
 def run_publish_check(config_path: Path) -> int:
@@ -776,10 +902,31 @@ def build_parser() -> argparse.ArgumentParser:
 
     publish_check = sub.add_parser(
         "publish-check",
-        help="Exit 0 if the dataset content changed vs publish_check.git_ref (default origin/main), "
-        "3 if unchanged (no-op gate)",
+        help="Exit 0 if the dataset content changed vs the baseline (publish_check.git_ref, default origin/main, "
+        "or the ledger with publish_check.baseline: file), 3 if unchanged (no-op gate)",
     )
     publish_check.add_argument("--config", required=True)
+
+    ledger_cmd = sub.add_parser(
+        "ledger",
+        help="Manage the publish ledger at publish_check.ledger_path (the file baseline of publish-check)",
+    )
+    ledger_sub = ledger_cmd.add_subparsers(dest="ledger_command", required=True)
+    ledger_init = ledger_sub.add_parser(
+        "init",
+        help="Create the ledger once: empty (next publish-check is a first publish) or seeded from a manifest",
+    )
+    ledger_init.add_argument("--config", required=True)
+    ledger_init.add_argument(
+        "--from-manifest",
+        default=None,
+        help="Seed the ledger with this dataset manifest, e.g. the last one published by the git baseline",
+    )
+    ledger_append = ledger_sub.add_parser(
+        "append",
+        help="Record the current dataset after a successful publish; a no-op when the last entry already has it",
+    )
+    ledger_append.add_argument("--config", required=True)
 
     publish = sub.add_parser("publish", help="Atomically publish a prepared Qlib dataset build via symlink")
     publish.add_argument("--build-provider-uri", required=True)
@@ -968,12 +1115,25 @@ def _dispatch(args: argparse.Namespace) -> None:
         if decision.warning_summary:
             print(decision.warning_summary, file=sys.stderr)
         if rc == 0:
-            print(f"Dataset content changed vs {decision.git_ref}; publish required.")
+            print(f"Dataset content changed vs {decision.compared_against}; publish required.")
         elif rc == 3:
-            print(f"No dataset content change vs {decision.git_ref}; skipping publish.")
+            print(f"No dataset content change vs {decision.compared_against}; skipping publish.")
         else:
             print(f"publish-check error: {decision.reason}", file=sys.stderr)
         raise SystemExit(rc)
+    elif args.command == "ledger" and args.ledger_command == "init":
+        from_manifest = Path(args.from_manifest) if args.from_manifest else None
+        path = init_publish_ledger(Path(args.config), from_manifest)
+        if from_manifest is None:
+            print(f"Publish ledger initialised (empty): {path}")
+        else:
+            print(f"Publish ledger initialised: {path} (seeded from {from_manifest})")
+    elif args.command == "ledger" and args.ledger_command == "append":
+        path, appended = append_current_dataset_to_ledger(Path(args.config))
+        if appended:
+            print(f"Publish ledger entry appended: {path}")
+        else:
+            print(f"Publish ledger already records this dataset: {path}")
     elif args.command == "publish":
         published = publish_dataset_build(Path(args.build_provider_uri), Path(args.provider_uri))
         print(f"Published provider URI: {published}")

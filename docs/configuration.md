@@ -76,6 +76,7 @@ security find-generic-password -s jquants-api-key >/dev/null && echo present || 
 - `storage.qlib_dir`: Qlib データセット出力先
 - `qlib.adjustment`: Qlib への出し方（既定 `vendor_factor`。raw の六フィールドだけなら `none`）
 - `publish_check.git_ref`: `publish-check` が比較する運用リポジトリの git 参照（既定 `origin/main`）
+- `publish_check.baseline` / `publish_check.ledger_path`: `publish-check` の比較基準を git から台帳ファイルに切り替える（[台帳](operations.md#台帳ファイルを比較基準にする)）
 - `universe.codes`: 対象銘柄コード
 
 
@@ -90,6 +91,8 @@ security find-generic-password -s jquants-api-key >/dev/null && echo present || 
 | `storage.parquet_dir` | 必須（設定例 `./data/parquet`） | 日足 Parquet 保存先 |
 | `storage.qlib_dir` | 必須（設定例 `./data/qlib_jp`） | Qlib データセット出力先 |
 | `publish_check.git_ref` | `origin/main` | `publish-check` が `lineage.parquet_sha256` を比較する git 参照。運用リポジトリの既定ブランチが `master` なら `origin/master`。commit を指さない参照は exit 1 |
+| `publish_check.baseline` | `git` | `publish-check` の比較基準。`git` は `git_ref` 上の manifest、`file` は `ledger_path` の台帳の末尾の行。一方が使えなくても、もう一方には切り替えない |
+| `publish_check.ledger_path` | なし（`baseline: file` では必須。設定例はコメントで `./data/state/publish_ledger.jsonl`） | publish 台帳（JSON Lines）のパス。相対パスは実行時の作業ディレクトリ基準。`jqqlib ledger init` / `append` も使う。未設定で必要になると exit 2 |
 | `qlib.adjustment` | `vendor_factor` | Qlib への出し方。`vendor_factor` はベンダー `AdjFactor` から dump 時に累積して `$factor` と調整済み価格・出来高を出す。`none` は raw の六フィールドだけ（`$factor` なし）。計算は [株価調整](jquants-price-adjustment.md) |
 | `storage.audit_dir` | `./data/audit` | `last_audit.json` 保存先 |
 | `universe.codes` | `[]` | 対象コード。空なら API 取得時の銘柄絞り込みなし |

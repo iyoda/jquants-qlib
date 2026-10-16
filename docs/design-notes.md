@@ -130,6 +130,60 @@ run-daily の取り込み範囲と、途中で失敗したときの挙動は [�
 
 テストはいずれも `tests/test_publish_check_git.py` にあります。
 
+### publish 台帳（`ledger.py`）
+
+`publish_check.baseline: file` は、manifest を git に置かずに比較基準を持つための仕組みです。データ由来の
+JSON を毎日公開リポジトリに commit すると J-Quants の再配布の制限に触れるため、git の比較基準だけでは
+運用リポジトリを公開できません。
+
+- git と file はどちらか一方だけを使い、失敗しても切り替えません。黙って切り替えると、どちらと比べたのかが
+  分からなくなるためです。名前: `_baseline_for_publish_check`
+- 台帳が無い・壊れているときは初回 publish にせずエラーにします。git では「無ければ初回」ですが、ファイルでは
+  パスの誤りや書きかけのファイルでも「無い」に見え、比較基準を失ったまま publish してしまうためです。
+  「初期化済みで基準なし」は、`ledger init` が作る空のファイルとして明示します。
+  テスト: `test_missing_ledger_fails_closed_instead_of_a_first_publish`、`test_initialised_empty_ledger_is_a_first_publish`
+- 途中の行が 1 行でも読めなければ止めます。書き込みは一時ファイルと rename で丸ごと置き換えるので、正常な
+  運用では書きかけの行は生じず、あれば別の何かが壊したと考えるためです。項目が欠けた行も同じです。比べる項目
+  だけが揃った手書きの行を受け入れると、壊れた台帳でも「変更なし」と判定してしまいます。
+  名前: `_replace_atomically`、`_entry_problem`。
+  テスト: `test_unparsable_or_blank_line_anywhere_is_an_error`、`test_ledger_without_a_trailing_newline_is_a_truncated_write`、
+  `test_entry_missing_any_field_or_with_a_wrong_type_is_an_error`
+- symlink の台帳は拒否します。rename はリンクそのものを置き換え、ロックもリンクの隣にできるので、読む先と書く先・
+  ロックが分かれてしまうためです。名前: `_refuse_symlink`。
+  テスト: `test_symlinked_ledger_is_refused_so_reads_writes_and_the_lock_cannot_diverge`
+- 台帳の読み書きの失敗（権限、容量不足など）は `LedgerError`（exit 1）にします。`OSError` のままだと CLI が設定の
+  誤り（exit 2）に分類してしまうためです。exit 2 は `ledger init` が既存の台帳を見つけたときだけで、その判定は
+  書き込みの外で行います（一時ファイルの衝突などの `FileExistsError` まで exit 2 にしないため）。
+  テスト: `test_unreadable_ledger_location_is_a_ledger_error_not_a_user_error`、
+  `test_failed_ledger_write_is_a_ledger_error_and_keeps_the_previous_ledger`、
+  `test_init_write_failure_even_a_temporary_file_collision_is_a_ledger_error`、
+  `test_directory_fsync_failure_after_the_rename_keeps_the_new_ledger_and_a_rerun_is_a_no_op`
+- 追記は末尾の行と同じ dataset なら何もしません。日次処理が追記の後で止まって再実行されても、行が重ならないように
+  するためです。追記の読み直しと書き込みはロックの中で行います。名前: `_records_the_same_dataset`。
+  テスト: `test_rerun_after_a_completed_append_does_not_duplicate_the_last_entry`、
+  `test_interrupted_append_leaves_the_previous_ledger_and_no_temporary_file`、
+  `test_append_reads_and_rewrites_while_holding_the_exclusive_lock`、
+  `test_append_replaces_the_ledger_while_holding_the_exclusive_lock`
+- `ledger append` は `publish-check` と同じ dataset の検査を通します。検査を 1 か所にしておかないと、比較では
+  拒否される dataset が台帳に入り得るためです。名前: `_check_current_dataset`。
+  テスト: `test_append_refuses_a_dataset_that_publish_check_would_refuse`
+- 記録する jqqlib の commit は、パッケージが jquants-qlib の作業ツリーの `src/jqqlib` にあるときだけ取ります。
+  別のリポジトリの中の venv に install された wheel で `git rev-parse HEAD` すると、そのリポジトリの commit を
+  記録してしまうためです。継承した `GIT_DIR`・`GIT_WORK_TREE` など、別のリポジトリを指す変数（git の hook の中で
+  設定される）だけを外して実行します。`GIT_*` を全部外すと、環境変数で渡した `safe.directory` まで消えて、
+  所有者の違う checkout で commit が null になるためです。
+  版と commit は記録だけで、比較には使いません。版は `pyproject.toml` の固定値で、変換処理の変更とは対応しない
+  ためです。名前: `jqqlib_source_commit`、`_environment_without_git_repository_overrides`、
+  `_REPOSITORY_LOCATION_VARIABLES`。
+  テスト: `test_installed_package_inside_another_repository_records_no_commit`、
+  `test_inherited_git_repository_variables_do_not_change_the_recorded_commit`、
+  `test_git_configuration_inherited_from_the_environment_still_applies`、
+  `test_a_different_producer_version_alone_is_the_same_dataset`
+- git と file のどちらでも、エラーの結果にも設定した比較基準を入れます。名前: `_with_configured_baseline`。
+  テスト: `test_error_decision_names_the_configured_baseline`、`test_git_baseline_never_falls_back_to_a_matching_ledger`
+
+テストはいずれも `tests/test_publish_ledger.py` にあります。
+
 ## 監査とカレンダー（`audit.py` / `trading_calendar.py`）
 
 XTKS の休場日に当たる平日は、以前の月〜金の判定なら欠損になっていました。欠損にせず

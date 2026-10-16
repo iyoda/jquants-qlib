@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from jqqlib.config import load_config
+from jqqlib.config import load_config, publish_check_baseline, publish_check_ledger_path
 
 
 class LoadConfigTests(unittest.TestCase):
@@ -63,6 +63,35 @@ class LoadConfigTests(unittest.TestCase):
         for bad in ("", "origin main", "--output=x", 3):
             with self.subTest(ref=bad), self.assertRaises(ValueError):
                 self.load({"storage": self.REQUIRED, "publish_check": {"git_ref": bad}})
+
+    def test_publish_check_baseline_defaults_to_git_and_accepts_only_git_or_file(self):
+        config = self.load({"storage": self.REQUIRED})
+        self.assertEqual(publish_check_baseline(config), "git")
+        config = self.load({"storage": self.REQUIRED, "publish_check": {"baseline": None}})
+        self.assertEqual(publish_check_baseline(config), "git")
+        config = self.load(
+            {"storage": self.REQUIRED, "publish_check": {"baseline": "file", "ledger_path": "./state/ledger.jsonl"}}
+        )
+        self.assertEqual(publish_check_baseline(config), "file")
+        for bad in ("", "GIT", "ledger", 1, []):
+            with self.subTest(baseline=bad), self.assertRaisesRegex(ValueError, "publish_check.baseline"):
+                self.load({"storage": self.REQUIRED, "publish_check": {"baseline": bad}})
+
+    def test_file_baseline_without_a_ledger_path_is_a_configuration_error(self):
+        with self.assertRaisesRegex(ValueError, "publish_check.ledger_path is required"):
+            self.load({"storage": self.REQUIRED, "publish_check": {"baseline": "file"}})
+
+    def test_ledger_path_keeps_working_directory_semantics_and_rejects_non_paths(self):
+        config = self.load({"storage": self.REQUIRED, "publish_check": {"ledger_path": "./state/ledger.jsonl"}})
+        self.assertEqual(publish_check_ledger_path(config), Path("./state/ledger.jsonl"))
+        for bad in ("", "  ", "bad\x00path", 3, []):
+            with self.subTest(path=bad), self.assertRaisesRegex(ValueError, "publish_check.ledger_path must be"):
+                self.load({"storage": self.REQUIRED, "publish_check": {"ledger_path": bad}})
+
+    def test_ledger_path_lookup_without_a_configured_path_is_a_configuration_error(self):
+        config = self.load({"storage": self.REQUIRED})
+        with self.assertRaisesRegex(ValueError, "publish_check.ledger_path is required"):
+            publish_check_ledger_path(config)
 
     def test_invalid_top_level(self):
         for value in (None, [], "path"):
