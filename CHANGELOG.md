@@ -6,6 +6,8 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-16
+
 ### Added
 
 - `publish_check.baseline: file` compares `publish-check` against the last entry of a JSON Lines
