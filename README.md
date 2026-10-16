@@ -40,7 +40,7 @@ Parquet は観測したままの raw（未調整）です。Qlib 側の価格・
 （PyPI への公開は予定していますが時期未定です）。
 
 ```bash
-pip install "git+https://github.com/iyoda/jquants-qlib@v0.1.0"   # タグ指定（リリース後）
+pip install "git+https://github.com/iyoda/jquants-qlib@v0.2.0"   # タグ指定（リリース後）
 pip install "git+https://github.com/iyoda/jquants-qlib@master"   # 最新リリース（master）
 pip install "git+https://github.com/iyoda/jquants-qlib@dev"      # 開発版（dev）
 ```
