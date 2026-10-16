@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import copy
+import errno
 import logging
 import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import pandas as pd
 
@@ -217,6 +219,87 @@ class ParquetToQlibPruneTests(unittest.TestCase):
 
             self.assertTrue(stale_feature.exists())
             self.assertEqual((qlib_dir / "calendars" / "day.txt").read_text(encoding="utf-8"), "2020-01-01\n")
+
+    def test_interrupt_during_subtree_swap_restores_the_previous_provider(self) -> None:
+        # KeyboardInterrupt is not an Exception: the restore must still run, and
+        # the backups must not be deleted before they are moved back.
+        original_rename = Path.rename
+
+        def interrupting_rename(self: Path, target):
+            if self.name == "calendars" and ".qlib_build_" in str(self):
+                raise KeyboardInterrupt
+            return original_rename(self, target)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            parquet_path = root / "daily_quotes.parquet"
+            qlib_dir = root / "qlib_jp"
+            stale_feature = _seed_generated_tree(qlib_dir)
+            _dataset(["10010"]).to_parquet(parquet_path, index=False)
+
+            with mock.patch.object(Path, "rename", interrupting_rename), self.assertRaises(KeyboardInterrupt):
+                parquet_to_qlib(parquet_path, qlib_dir)
+
+            self.assertTrue(stale_feature.exists())
+            self.assertFalse((qlib_dir / "features" / "10010").exists())
+            self.assertEqual((qlib_dir / "calendars" / "day.txt").read_text(encoding="utf-8"), "2020-01-01\n")
+            self.assertTrue((qlib_dir / "instruments" / "all.txt").exists())
+            self.assertEqual(sorted(p.name for p in qlib_dir.iterdir()), ["calendars", "features", "instruments"])
+
+    def test_failed_restore_after_an_interrupt_keeps_the_backup_recoverable(self) -> None:
+        original_rename = Path.rename
+
+        def interrupt_install_then_fail_restore(self: Path, target):
+            if self.name == "calendars" and ".qlib_build_" in str(self):
+                raise KeyboardInterrupt
+            if self.name == "features" and ".qlib_generated_backup_" in str(self):
+                raise OSError(errno.EIO, "restore failed")
+            return original_rename(self, target)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            parquet_path = root / "daily_quotes.parquet"
+            qlib_dir = root / "qlib_jp"
+            _seed_generated_tree(qlib_dir)
+            _dataset(["10010"]).to_parquet(parquet_path, index=False)
+
+            with mock.patch.object(Path, "rename", interrupt_install_then_fail_restore), self.assertRaises(OSError):
+                parquet_to_qlib(parquet_path, qlib_dir)
+
+            backup_roots = list(qlib_dir.glob(".qlib_generated_backup_*"))
+            self.assertEqual(len(backup_roots), 1)
+            self.assertEqual((backup_roots[0] / "features" / "99990" / "open.day.bin").read_bytes(), b"stale")
+
+    def test_symlinked_qlib_dir_on_another_filesystem_is_staged_beside_its_target(self) -> None:
+        # A published provider is a symlink that may point at another filesystem.
+        # Simulate that boundary: renames between the two roots fail with EXDEV.
+        original_rename = Path.rename
+
+        with tempfile.TemporaryDirectory() as link_tmp, tempfile.TemporaryDirectory() as build_tmp:
+            link_root = Path(link_tmp).resolve()
+            build_root = Path(build_tmp).resolve()
+
+            def device_of(path: Path) -> Path:
+                return build_root if path.resolve().is_relative_to(build_root) else link_root
+
+            def cross_device_rename(self: Path, target):
+                if device_of(self) != device_of(Path(target).parent):
+                    raise OSError(errno.EXDEV, "Invalid cross-device link")
+                return original_rename(self, target)
+
+            real_qlib = build_root / "builds" / "b1" / "qlib"
+            stale_feature = _seed_generated_tree(real_qlib)
+            qlib_dir = link_root / "qlib_jp"
+            qlib_dir.symlink_to(real_qlib, target_is_directory=True)
+            parquet_path = link_root / "daily_quotes.parquet"
+            _dataset(["10010"]).to_parquet(parquet_path, index=False)
+
+            with mock.patch.object(Path, "rename", cross_device_rename):
+                parquet_to_qlib(parquet_path, qlib_dir)
+
+            self.assertFalse(stale_feature.exists())
+            self.assertTrue((real_qlib / "features" / "10010").is_dir())
+            self.assertTrue(qlib_dir.is_symlink())
 
     def test_missing_adjustment_factor_does_not_write_a_dump(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

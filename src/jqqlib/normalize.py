@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import math
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import pandas as pd
 
+logger = logging.getLogger(__name__)
 
 QLIB_FIELDS = ["open", "high", "low", "close", "volume", "amount"]
 QLIB_FACTOR_FIELD = "factor"
@@ -37,7 +39,15 @@ def _ex_rights_as_str(value: object) -> object:
     return text
 
 
-def normalize_for_qlib(df: pd.DataFrame) -> pd.DataFrame:
+def normalize_for_qlib(df: pd.DataFrame, *, require_adjustment_factor: bool = False) -> pd.DataFrame:
+    """Map vendor quote columns onto the raw Parquet columns.
+
+    A source without an ``AdjFactor`` / ``AdjustmentFactor`` column gets
+    ``adjustment_factor`` 1.0 (no split adjustment), unless
+    ``require_adjustment_factor`` is set (``qlib.adjustment: vendor_factor``),
+    which refuses it instead of silently dumping unadjusted prices. Null or
+    non-numeric vendor factors on individual rows become 1.0 with a warning.
+    """
     import pandas as pd
 
     column_map = {
@@ -69,9 +79,22 @@ def normalize_for_qlib(df: pd.DataFrame) -> pd.DataFrame:
     else:
         factor_source = None
     if factor_source is None:
+        if require_adjustment_factor:
+            raise RuntimeError(
+                "Source data has no AdjFactor/AdjustmentFactor column; qlib.adjustment vendor_factor needs "
+                "the vendor factor to split-adjust prices (use qlib.adjustment: none for raw prices)."
+            )
+        logger.warning(
+            "Source data has no AdjFactor/AdjustmentFactor column; adjustment_factor is set to 1.0 (no split "
+            "adjustment)."
+        )
         normalized["adjustment_factor"] = 1.0
     else:
-        normalized["adjustment_factor"] = pd.to_numeric(factor_source, errors="coerce").fillna(1.0)
+        numeric_factor = pd.to_numeric(factor_source, errors="coerce")
+        filled = int(numeric_factor.isna().sum())
+        if filled:
+            logger.warning("Filled %d null or non-numeric AdjFactor values with 1.0.", filled)
+        normalized["adjustment_factor"] = numeric_factor.fillna(1.0)
 
     if "ExRT" in normalized.columns:
         normalized["ex_rights_type"] = normalized["ExRT"].map(_ex_rights_as_str)
@@ -86,6 +109,10 @@ def normalize_for_qlib(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def normalize_daily_quote_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Rename the V2 short column names (``O``, ``H``, ``L``, ``C``, ``Vo``, ``Va``) to the long ones.
+
+    Other columns are kept unchanged.
+    """
     column_map = {
         "O": "Open",
         "H": "High",

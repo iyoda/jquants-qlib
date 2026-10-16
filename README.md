@@ -40,7 +40,7 @@ Parquet は観測したままの raw（未調整）です。Qlib 側の価格・
 （PyPI への公開は予定していますが時期未定です）。
 
 ```bash
-pip install "git+https://github.com/iyoda/jquants-qlib@v0.1.0"   # タグ指定（リリース後）
+pip install "git+https://github.com/iyoda/jquants-qlib@v0.2.0"   # タグ指定（リリース後）
 pip install "git+https://github.com/iyoda/jquants-qlib@master"   # 最新リリース（master）
 pip install "git+https://github.com/iyoda/jquants-qlib@dev"      # 開発版（dev）
 ```
@@ -80,7 +80,7 @@ CSV は架空のデータです。
 
 ```bash
 python -m tests.support.synthetic --out /tmp/sample
-# 分割イベントを含める例（架空コード。繰り返し可。省略時は AdjustmentFactor 列なし）
+# 分割イベントを含める例（架空コード。繰り返し可。省略時は AdjustmentFactor がすべて 1.0）
 # python -m tests.support.synthetic --out /tmp/sample --split 10010:2026-06-03:0.5
 cat > /tmp/sample/config.yaml <<'YAML'
 storage:
@@ -166,11 +166,12 @@ Python 3.10–3.12（[.tool-versions](.tool-versions) は 3.12）。macOS / Linu
 | `audit` | 直近営業日の欠損監査 |
 | `publish` | 準備済み provider の symlink 切替 |
 | `publish-paths` | Parquet / manifest / quality report のパスを出力 |
-| `publish-check` | 運用リポジトリの `publish_check.git_ref`（既定 `origin/main`）と比較（変更なし exit 3） |
+| `publish-check` | 比較基準と比べる（既定は運用リポジトリの `publish_check.git_ref`＝`origin/main`、`publish_check.baseline: file` なら台帳。変更なし exit 3） |
+| `ledger init` / `ledger append` | publish 台帳（`publish_check.ledger_path`）を一度だけ作る／publish 後に記録する |
 | `fundamentals_pipeline`（実験的） | 株価 CLI とは別 module の財務データ ETL（PIT パネル）。`python -m jqqlib.fundamentals_pipeline --help` |
 
 設定ファイルや引数の誤りは `error: <message>`（stderr）と exit 2 で終了し、traceback は出ません。
-`validate` の品質エラー・`audit` の欠損・`publish-check` の manifest 異常・取得や変換の dataset 状態異常は exit 1、
+`validate` の品質エラー・`audit` の欠損・`publish-check` の manifest 異常・取得や変換の dataset 状態異常・J-Quants API や通信の失敗（認証エラー 401/403 は exit 2）は exit 1、
 カレンダー不可と `publish` の置換拒否は exit 2、`publish-check` の変更なしは exit 3 です
 （[exit code の一覧](docs/operations.md#exit-code-の見方)）。
 実行例と cron は [運用ガイド](docs/operations.md)、障害時の手順は

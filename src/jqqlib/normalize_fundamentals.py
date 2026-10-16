@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+import math
+import numbers
+import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import pandas as pd
 
 
-# Numeric fundamental fields to carry (V2 /fins/summary columns). The set was
-# validated against a real pull (483/500 universe codes, pit_violations == 0)
-# before being fixed here.
 CARRY_NUM = [
     "NP", "FNP", "NxFNP", "Eq", "EPS", "DEPS", "FEPS", "BPS",
     "Sales", "OP", "TA", "CFO", "ShOutFY", "TrShFY", "AvgSh",
@@ -19,15 +19,77 @@ CARRY_STR = ["CurPerType"]
 
 SRC_DISC_DATE_COLUMN = "_src_DiscDate"
 
+_ASCII_DIGITS_RE = re.compile(r"[0-9]+")
+_DISC_TIME_RE = re.compile(r"([0-9]{1,2}):([0-9]{2})(?::([0-9]{2}))?")
+
+
+def _disc_no_canonical_digits(value: object) -> str | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, numbers.Integral):
+        return str(int(value)) if int(value) >= 0 else None
+    if isinstance(value, numbers.Real):
+        number = float(value)
+        if math.isfinite(number) and number.is_integer() and number >= 0:
+            return str(int(number))
+        return None
+    text = str(value).strip()
+    if not _ASCII_DIGITS_RE.fullmatch(text):
+        return None
+    return text.lstrip("0") or "0"
+
+
+def _disc_time_seconds_after_midnight(value: object) -> int | None:
+    if value is None:
+        return None
+    match = _DISC_TIME_RE.fullmatch(str(value).strip())
+    if match is None:
+        return None
+    hours, minutes, seconds = int(match[1]), int(match[2]), int(match[3] or 0)
+    if minutes > 59 or seconds > 59:
+        return None
+    return hours * 3600 + minutes * 60 + seconds
+
+
+def _blank_strings_as_null(values: pd.Series) -> pd.Series:
+    blank = (values.astype("string").str.strip() == "").fillna(False)
+    return values.mask(blank)
+
+
+def _add_disclosure_order_keys(working: pd.DataFrame) -> list[str]:
+    import pandas as pd
+
+    order = ["Code", "DiscDate"]
+    if "DiscTime" in working.columns:
+        working["_disc_time"] = pd.Series(
+            [_disc_time_seconds_after_midnight(value) for value in working["DiscTime"]],
+            index=working.index,
+            dtype="Int64",
+        )
+        order.append("_disc_time")
+    if "DiscNo" in working.columns:
+        disc_no = [_disc_no_canonical_digits(value) for value in working["DiscNo"]]
+        working["_disc_no_digit_count"] = pd.Series(
+            [None if key is None else len(key) for key in disc_no], index=working.index, dtype="Int64"
+        )
+        working["_disc_no"] = pd.Series(disc_no, index=working.index, dtype="string")
+        order += ["_disc_no_digit_count", "_disc_no"]
+    return order
+
 
 def normalize_fundamentals(raw: pd.DataFrame, calendar: pd.DatetimeIndex) -> pd.DataFrame:
     """Build the as-of (point-in-time) fundamentals panel.
 
     PIT rule (conservative, look-ahead-free): a disclosure dated ``DiscDate`` D
     becomes effective on the first trading day STRICTLY AFTER D (``DiscTime`` is
-    ignored -- the conservative choice), then is forward-filled per code until
-    the next disclosure supersedes it. Rows before a code's first disclosure are
-    dropped (no fundamental is known as-of yet).
+    ignored for this -- the conservative choice), then is forward-filled per
+    code until the next disclosure supersedes it. Rows before a code's first
+    disclosure are dropped (no fundamental is known as-of yet).
+
+    Disclosures of one code that take effect on the same day (e.g. results and
+    a forecast revision on one ``DiscDate``) are merged field by field in
+    ``DiscDate`` / ``DiscTime`` / ``DiscNo`` order: the latest non-null value
+    of each field wins, as the forward fill does across days.
 
     Returns a frame indexed by a 2-level ``["datetime", "instrument"]``
     MultiIndex (StaticDataLoader-ready), with a ``_src_DiscDate`` provenance
@@ -50,25 +112,30 @@ def normalize_fundamentals(raw: pd.DataFrame, calendar: pd.DatetimeIndex) -> pd.
     for col in CARRY_NUM:
         if col in working.columns:
             working[col] = pd.to_numeric(working[col], errors="coerce")
+    for col in CARRY_STR:
+        if col in working.columns:
+            working[col] = _blank_strings_as_null(working[col])
 
-    # effective date = first trading day STRICTLY AFTER DiscDate (no same-day use)
-    pos = np.searchsorted(cal_arr, working["DiscDate"].to_numpy(), side="right")
-    in_cal = pos < len(cal_arr)
-    working = working[in_cal].copy()
-    working["eff_date"] = cal_arr[pos[in_cal]]
+    first_session_strictly_after_disclosure = np.searchsorted(
+        cal_arr, working["DiscDate"].to_numpy(), side="right"
+    )
+    has_effective_session = first_session_strictly_after_disclosure < len(cal_arr)
+    working = working[has_effective_session].copy()
+    working["eff_date"] = cal_arr[first_session_strictly_after_disclosure[has_effective_session]]
 
     present_num = [c for c in CARRY_NUM if c in working.columns]
     present_str = [c for c in CARRY_STR if c in working.columns]
     keep = ["Code", "eff_date", "DiscDate"] + present_num + present_str
-    # If two disclosures land on the same eff_date for a code, keep the latest DiscDate.
-    ev = (
-        working[keep]
-        .sort_values(["Code", "DiscDate"])
-        .drop_duplicates(["Code", "eff_date"], keep="last")
+    disclosure_order = _add_disclosure_order_keys(working)
+    latest_non_null_per_field_per_effective_day = (
+        working.sort_values(disclosure_order, kind="mergesort", na_position="first")[keep]
+        .groupby(["Code", "eff_date"], sort=False)
+        .last()
+        .reset_index()
     )
 
     frames = []
-    for code, group in ev.groupby("Code", sort=False):
+    for code, group in latest_non_null_per_field_per_effective_day.groupby("Code", sort=False):
         g = group.drop(columns=["Code"]).set_index("eff_date").sort_index()
         g = g.reindex(cal).ffill()
         g["instrument"] = code
@@ -77,8 +144,8 @@ def normalize_fundamentals(raw: pd.DataFrame, calendar: pd.DatetimeIndex) -> pd.
     panel = pd.concat(frames)
     panel.index.name = "datetime"
     panel = panel.rename(columns={"DiscDate": SRC_DISC_DATE_COLUMN})
-    # Drop rows before a code's first disclosure (no fundamental as-of yet).
-    panel = panel[panel[SRC_DISC_DATE_COLUMN].notna()].copy()
+    has_disclosure_as_of = panel[SRC_DISC_DATE_COLUMN].notna()
+    panel = panel[has_disclosure_as_of].copy()
     panel = panel.set_index("instrument", append=True).reorder_levels(
         ["datetime", "instrument"]
     ).sort_index()

@@ -12,9 +12,23 @@ if TYPE_CHECKING:
 PRICE_FIELDS = ("open", "high", "low", "close")
 
 
-def _exclusive_reverse_cumprod(values: pd.Series) -> pd.Series:
-    reversed_values = values.iloc[::-1]
-    return reversed_values.cumprod().shift(1, fill_value=1.0).iloc[::-1]
+def _per_symbol_product_of_later_values(values_by_symbol_then_date: pd.Series, symbols: pd.Series) -> pd.Series:
+    reversed_values = values_by_symbol_then_date.iloc[::-1]
+    reversed_symbols = symbols.iloc[::-1]
+    products = reversed_values.groupby(reversed_symbols, sort=False).cumprod()
+    return products.groupby(reversed_symbols, sort=False).shift(1, fill_value=1.0).iloc[::-1]
+
+
+def _by_symbol_first_appearance_then_date(frame: pd.DataFrame) -> pd.DataFrame:
+    import pandas as pd
+
+    symbol_first_appearance = pd.Series(pd.factorize(frame["symbol"])[0], index=frame.index)
+    stable_order = (
+        pd.DataFrame({"symbol_first_appearance": symbol_first_appearance, "date": frame["date"]})
+        .sort_values(["symbol_first_appearance", "date"], kind="mergesort")
+        .index
+    )
+    return frame.iloc[stable_order].reset_index(drop=True)
 
 
 def _volume_factors(frame: pd.DataFrame, price_factors: pd.Series) -> pd.Series:
@@ -49,18 +63,16 @@ def apply_vendor_adjustment(
     if int(numeric.isna().sum()):
         raise ValueError("Null adjustment_factor values are not allowed when qlib.adjustment is vendor_factor.")
     out["adjustment_factor"] = numeric
-    pieces: list[pd.DataFrame] = []
-    for _, group in out.groupby("symbol", sort=False):
-        group = group.sort_values("date")
-        price_cum = _exclusive_reverse_cumprod(group["adjustment_factor"])
-        volume_cum = _exclusive_reverse_cumprod(_volume_factors(group, group["adjustment_factor"]))
-        adjusted = group.copy()
-        for field in PRICE_FIELDS:
-            adjusted[field] = adjusted[field] * price_cum
-        adjusted["volume"] = adjusted["volume"] / volume_cum
-        adjusted["factor"] = price_cum
-        pieces.append(adjusted)
-    if not pieces:
+    rows_with_symbol = out[out["symbol"].notna()]
+    if rows_with_symbol.empty:
         out["factor"] = 1.0
         return out
-    return pd.concat(pieces, ignore_index=True)
+    ordered = _by_symbol_first_appearance_then_date(rows_with_symbol.reset_index(drop=True))
+    float_factors = ordered["adjustment_factor"].astype("float64")
+    price_cum = _per_symbol_product_of_later_values(float_factors, ordered["symbol"])
+    volume_cum = _per_symbol_product_of_later_values(_volume_factors(ordered, float_factors), ordered["symbol"])
+    for field in PRICE_FIELDS:
+        ordered[field] = ordered[field] * price_cum
+    ordered["volume"] = ordered["volume"] / volume_cum
+    ordered["factor"] = price_cum
+    return ordered

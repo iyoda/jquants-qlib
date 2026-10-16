@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import datetime as dt
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from .normalize import PARQUET_BASE_COLUMNS, QLIB_FIELDS
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 OHLCV_FIELDS = ["open", "high", "low", "close", "volume"]
 
 
 def validate_date_range(start_date: dt.date, end_date: dt.date) -> None:
+    """Raise ``ValueError`` when ``start_date`` is after ``end_date``."""
     if start_date > end_date:
         raise ValueError(f"Invalid date range: start ({start_date}) must be <= end ({end_date}).")
 
@@ -18,15 +23,8 @@ def validate_date_range(start_date: dt.date, end_date: dt.date) -> None:
 def validate_qlib_readiness(parquet_path: Path) -> list[str]:
     """Validate whether parquet data satisfies dump_bin input expectations.
 
-    Checks:
-    - required columns exist
-    - date is parseable
-    - symbol is non-empty
-    - OHLCV/amount columns are numeric when non-null
-    - partial OHLCV null rows are rejected as incomplete bars
+    See ``qlib_readiness_errors`` for the checks.
     """
-    errors: list[str] = []
-
     if not parquet_path.exists():
         return [f"Parquet file not found: {parquet_path}"]
 
@@ -35,6 +33,24 @@ def validate_qlib_readiness(parquet_path: Path) -> list[str]:
     df = pd.read_parquet(parquet_path)
     if df.empty:
         return [f"Parquet file is empty: {parquet_path}"]
+    return qlib_readiness_errors(df)
+
+
+def qlib_readiness_errors(df: pd.DataFrame) -> list[str]:
+    """Return the readiness errors of a non-empty Parquet-shaped frame.
+
+    Checks:
+    - required columns exist
+    - date is parseable
+    - symbol is non-empty
+    - OHLCV/amount columns are numeric when non-null
+    - adjustment_factor is present, numeric, finite, and positive
+    - partial OHLCV null rows are rejected as incomplete bars
+    - (symbol, date) is unique
+    """
+    import pandas as pd
+
+    errors: list[str] = []
 
     required_cols = list(PARQUET_BASE_COLUMNS)
     missing_cols = [col for col in required_cols if col not in df.columns]

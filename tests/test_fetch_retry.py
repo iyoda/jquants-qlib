@@ -5,6 +5,7 @@ import gzip
 import unittest
 
 import pandas as pd
+import requests
 
 from jqqlib.fetch import call_jquants_with_retry, fetch_bulk_daily_quotes, fetch_daily_quotes, iter_date_chunks
 
@@ -13,6 +14,13 @@ class _StatusError(Exception):
     def __init__(self, message: str, status_code: int) -> None:
         super().__init__(message)
         self.status_code = status_code
+
+
+def _http_error(status_code: int) -> requests.HTTPError:
+    # What ClientV2 raises via raise_for_status; requests.HTTPError is an OSError subclass.
+    response = requests.Response()
+    response.status_code = status_code
+    return requests.HTTPError(f"{status_code} error", response=response)
 
 
 def _retry(api_call):
@@ -83,6 +91,44 @@ class CallWithRetryTests(unittest.TestCase):
             _retry(api_call)
         self.assertEqual(attempts["n"], 4)  # 1 + 3 retries
 
+    def test_requests_http_client_errors_fail_fast(self) -> None:
+        for status in (400, 401, 403, 404):
+            with self.subTest(status=status):
+                attempts = {"n": 0}
+
+                def api_call(status: int = status, attempts: dict[str, int] = attempts):
+                    attempts["n"] += 1
+                    raise _http_error(status)
+
+                with self.assertRaises(requests.HTTPError):
+                    _retry(api_call)
+                self.assertEqual(attempts["n"], 1)
+
+    def test_requests_http_transient_errors_are_retried(self) -> None:
+        for status in (429, 500, 503):
+            with self.subTest(status=status):
+                attempts = {"n": 0}
+
+                def api_call(status: int = status, attempts: dict[str, int] = attempts):
+                    attempts["n"] += 1
+                    raise _http_error(status)
+
+                with self.assertRaises(requests.HTTPError):
+                    _retry(api_call)
+                self.assertEqual(attempts["n"], 4)  # 1 + 3 retries
+
+    def test_requests_connection_error_without_status_is_retried(self) -> None:
+        attempts = {"n": 0}
+
+        def api_call():
+            attempts["n"] += 1
+            if attempts["n"] < 3:
+                raise requests.ConnectionError("Max retries exceeded")
+            return "ok"
+
+        self.assertEqual(_retry(api_call), "ok")
+        self.assertEqual(attempts["n"], 3)
+
     def test_non_transient_status_less_error_raises_immediately(self) -> None:
         attempts = {"n": 0}
 
@@ -93,6 +139,19 @@ class CallWithRetryTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             _retry(api_call)
         self.assertEqual(attempts["n"], 1)
+
+    def test_status_less_auth_failure_message_is_not_mistaken_for_a_network_blip(self) -> None:
+        for message in ("401 Unauthorized", "403 Forbidden", "invalid api key"):
+            with self.subTest(message=message):
+                attempts = {"n": 0}
+
+                def api_call(message: str = message, attempts: dict[str, int] = attempts):
+                    attempts["n"] += 1
+                    raise Exception(message)
+
+                with self.assertRaisesRegex(Exception, message):
+                    _retry(api_call)
+                self.assertEqual(attempts["n"], 1)
 
     def test_status_less_retry_can_be_disabled(self) -> None:
         attempts = {"n": 0}
@@ -216,6 +275,32 @@ class FetchRequestPacingTests(unittest.TestCase):
 
         self.assertEqual(len(client.calls), 3)
         self.assertEqual(sleeps, [0.75, 0.75])
+
+    def test_client_v2_400_http_error_falls_back_without_retrying_the_range(self) -> None:
+        class Client:
+            def __init__(self) -> None:
+                self.calls: list[dict] = []
+
+            def get_eq_bars_daily(self, **kwargs):
+                self.calls.append(kwargs)
+                if "from_yyyymmdd" in kwargs:
+                    raise _http_error(400)
+                return pd.DataFrame({"Date": [kwargs["date_yyyymmdd"]], "Code": ["10010"]})
+
+        client = Client()
+        sleeps: list[float] = []
+
+        fetch_daily_quotes(
+            client,
+            dt.date(2026, 6, 1),
+            dt.date(2026, 6, 2),
+            retry_base_delay_sec=1.0,
+            sleeper=sleeps.append,
+        )
+
+        self.assertEqual([call for call in client.calls if "from_yyyymmdd" in call], [client.calls[0]])
+        self.assertEqual(len(client.calls), 3)
+        self.assertEqual(sleeps, [])
 
     def test_legacy_daily_quote_requests_are_paced(self) -> None:
         class Client:

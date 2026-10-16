@@ -33,9 +33,16 @@ universe:
   codes: []
 
 publish_check:
+  # publish-check の比較基準。git（既定）は git_ref 上の manifest、file は ledger_path の台帳の末尾の行。
+  # Baseline of publish-check: git (default) compares with the manifest on git_ref, file with the
+  # last entry of the ledger at ledger_path. One is never a fallback for the other.
+  baseline: "git"
   # publish-check が比較する運用リポジトリ側の git 参照。master 運用なら "origin/master"。
   # Git revision that publish-check compares the manifest against (default origin/main).
   git_ref: "origin/main"
+  # baseline: file で必須。`jqqlib ledger init` で一度だけ作り、publish 成功後に `jqqlib ledger append`。
+  # Required for baseline: file. Create it once with `jqqlib ledger init`.
+  # ledger_path: "./data/state/publish_ledger.jsonl"
 
 qlib:
   # vendor_factor (default): dump split/reverse-split/rights-issue adjusted prices

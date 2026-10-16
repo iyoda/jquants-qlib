@@ -21,9 +21,10 @@ class SyntheticQuotesTests(unittest.TestCase):
             self.assertEqual(first.read_bytes(), second.read_bytes())
             with first.open(newline="") as stream:
                 reader = csv.DictReader(stream)
-                self.assertEqual(reader.fieldnames, BOOTSTRAP_CSV_COLUMNS)
+                self.assertEqual(reader.fieldnames, [*BOOTSTRAP_CSV_COLUMNS, "AdjustmentFactor"])
                 rows = list(reader)
             self.assertEqual(len(rows), 4)
+            self.assertEqual({row["AdjustmentFactor"] for row in rows}, {"1.0"})
             self.assertEqual({row["Date"] for row in rows}, {"2026-06-05", "2026-06-08"})
             self.assertEqual({row["Code"] for row in rows}, {"10010", "10020"})
             for row in rows:

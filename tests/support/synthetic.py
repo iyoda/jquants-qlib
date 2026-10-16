@@ -62,9 +62,10 @@ def write_synthetic_daily_quotes_csv(
     rng = random.Random(0)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    fieldnames = list(BOOTSTRAP_CSV_COLUMNS)
-    if events:
-        fieldnames.append("AdjustmentFactor")
+    # Like the vendor's bulk CSV, the factor column is always present (1.0 on
+    # days without an event): qlib.adjustment vendor_factor refuses a source
+    # without it.
+    fieldnames = [*BOOTSTRAP_CSV_COLUMNS, "AdjustmentFactor"]
     with path.open("w", encoding="utf-8", newline="") as stream:
         writer = csv.DictWriter(stream, fieldnames=fieldnames, lineterminator="\n")
         writer.writeheader()
@@ -79,8 +80,7 @@ def write_synthetic_daily_quotes_csv(
                     "Low": min(opening, closing) - 5, "Close": closing,
                     "Volume": volume, "TurnoverValue": closing * volume,
                 }
-                if events:
-                    row["AdjustmentFactor"] = events.get(code, {}).get(day.isoformat(), 1.0)
+                row["AdjustmentFactor"] = (events or {}).get(code, {}).get(day.isoformat(), 1.0)
                 writer.writerow(row)
     return path
 

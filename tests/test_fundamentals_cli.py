@@ -7,6 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import pandas as pd
+
 from jqqlib.fundamentals_pipeline import main
 
 
@@ -61,6 +63,25 @@ class FundamentalsCliTests(unittest.TestCase):
         self.assertEqual(stdout, "")
         self.assertEqual(stderr, "error: PIT AUDIT FAILED: 1 look-ahead violation(s) detected.\n")
         self.assertNotIn("Traceback", stderr)
+
+    def test_no_fundamentals_data_exits_1_like_the_price_cli(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = root / "config.yaml"
+            config.write_text(
+                f"storage:\n  parquet_dir: {root / 'p'}\n  qlib_dir: {root / 'q'}\n"
+                f"fundamentals:\n  parquet_dir: {root / 'f'}\n",
+                encoding="utf-8",
+            )
+            with (
+                patch("jqqlib.fundamentals_pipeline.create_jquants_client"),
+                patch("jqqlib.fundamentals_pipeline.read_price_universe_codes", return_value=["10010"]),
+                patch("jqqlib.fundamentals_pipeline.fetch_fundamentals", return_value=pd.DataFrame()),
+            ):
+                code, stdout, stderr = self.invoke("run-fundamentals-etl", "--config", str(config))
+        self.assertEqual(code, 1)
+        self.assertEqual(stdout, "")
+        self.assertEqual(stderr, "error: No fundamentals data fetched from J-Quants API.\n")
 
 
 if __name__ == "__main__":

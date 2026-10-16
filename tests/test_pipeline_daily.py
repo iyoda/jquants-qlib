@@ -9,11 +9,15 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import pyarrow as pa
+import requests
 import yaml
 
 from jqqlib.audit import GapAuditResult
 from jqqlib.pipeline import (
+    build_parser,
     catch_up_start_date,
+    cli_error_exit_code,
     iter_recent_business_dates,
     main,
     parse_as_of_date,
@@ -21,6 +25,7 @@ from jqqlib.pipeline import (
     validate_etl_config,
 )
 from jqqlib.store import NoDataFetchedError
+from jqqlib.trading_calendar import ExactCalendarRequired
 
 
 class RunDailyTests(unittest.TestCase):
@@ -166,6 +171,38 @@ class RunDailyTests(unittest.TestCase):
 
         self.assertEqual(calls, [(dt.date(2026, 6, 3), dt.date(2026, 6, 5))])
 
+    def test_default_daily_runner_refuses_replace_merge_mode(self) -> None:
+        # replace would cut the Parquet down to the daily fetch window on every run.
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.yaml"
+            config_path.write_text(yaml.safe_dump({
+                "storage": {"parquet_dir": str(Path(tmp) / "parquet"), "qlib_dir": str(Path(tmp) / "qlib")},
+                "etl": {"merge_mode": "replace"},
+            }), encoding="utf-8")
+
+            with (
+                mock.patch("jqqlib.pipeline.run_all") as run_all,
+                self.assertRaisesRegex(ValueError, "run-daily requires etl.merge_mode: upsert"),
+            ):
+                run_daily(config_path, dt.date(2026, 6, 5), dataset_end_reader=lambda _: dt.date(2026, 6, 4))
+
+        run_all.assert_not_called()
+
+    def test_default_daily_runner_runs_all_with_upsert(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "config.yaml"
+            config_path.write_text(yaml.safe_dump({
+                "storage": {"parquet_dir": str(Path(tmp) / "parquet"), "qlib_dir": str(Path(tmp) / "qlib")},
+            }), encoding="utf-8")
+
+            with mock.patch("jqqlib.pipeline.run_all") as run_all:
+                target_date = run_daily(
+                    config_path, dt.date(2026, 6, 5), dataset_end_reader=lambda _: dt.date(2026, 6, 2)
+                )
+
+        self.assertEqual(target_date, dt.date(2026, 6, 5))
+        run_all.assert_called_once_with(config_path, dt.date(2026, 6, 3), dt.date(2026, 6, 5))
+
     def test_catch_up_start_date_uses_target_when_dataset_is_current(self) -> None:
         self.assertEqual(
             catch_up_start_date(dt.date(2026, 6, 5), dt.date(2026, 6, 5)),
@@ -191,6 +228,38 @@ class RunDailyTests(unittest.TestCase):
 
 
 class AuditCommandTests(unittest.TestCase):
+    def _config(self, tmp: str) -> Path:
+        config_path = Path(tmp) / "settings.yaml"
+        config_path.write_text(yaml.safe_dump({"storage": {
+            "parquet_dir": str(Path(tmp) / "parquet"),
+            "qlib_dir": str(Path(tmp) / "qlib"),
+            "audit_dir": str(Path(tmp) / "audit"),
+        }}))
+        return config_path
+
+    def test_unavailable_calendar_exits_2_not_as_a_data_gap(self):
+        for command, patched in (("audit", "jqqlib.pipeline.run_audit"), ("run-daily", "jqqlib.pipeline.run_daily")):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as tmp:
+                stderr = io.StringIO()
+                with (
+                    mock.patch("sys.argv", ["jqqlib", command, "--config", str(self._config(tmp))]),
+                    mock.patch(patched, side_effect=ExactCalendarRequired("no XTKS")),
+                    contextlib.redirect_stdout(io.StringIO()),
+                    contextlib.redirect_stderr(stderr),
+                    self.assertRaises(SystemExit) as raised,
+                ):
+                    main()
+                self.assertEqual(raised.exception.code, 2)
+                self.assertIn("XTKS trading calendar unavailable", stderr.getvalue())
+                self.assertFalse((Path(tmp) / "audit" / "last_audit.json").exists())
+
+    def test_run_daily_accepts_the_audit_window_flag_the_daily_wrapper_forwards(self):
+        args = build_parser().parse_args(
+            ["run-daily", "--config", "config.yaml", "--as-of", "2026-08-12", "--window-business-days", "5"]
+        )
+        self.assertEqual(args.command, "run-daily")
+        self.assertEqual(args.window_business_days, 5)
+
     def test_audit_writes_to_configured_directory_and_preserves_exit_status(self):
         for gaps in ([], [dt.date(2026, 8, 10)]):
             with self.subTest(gaps=gaps), tempfile.TemporaryDirectory() as tmp:
@@ -277,6 +346,48 @@ class EtlConfigValidationTests(unittest.TestCase):
     def test_rejects_unsupported_merge_mode(self) -> None:
         with self.assertRaisesRegex(ValueError, "etl.merge_mode"):
             validate_etl_config({"etl": {"merge_mode": "append"}})
+
+
+class CliExitCodeTests(unittest.TestCase):
+    def test_user_errors_exit_2(self) -> None:
+        for exc in (ValueError("etl.retries must be 0 or greater."), FileNotFoundError("config.yaml")):
+            with self.subTest(exc=type(exc).__name__):
+                self.assertEqual(cli_error_exit_code(exc), 2)
+
+    def test_rejected_credentials_exit_2(self) -> None:
+        # 401/403 are not retried and re-running cannot fix a wrong key: a config error.
+        for status in (401, 403):
+            response = requests.Response()
+            response.status_code = status
+            with self.subTest(status=status):
+                self.assertEqual(cli_error_exit_code(requests.HTTPError(str(status), response=response)), 2)
+
+    def test_run_failures_exit_1(self) -> None:
+        response = requests.Response()
+        response.status_code = 503
+        failures = (
+            RuntimeError("Parquet is not Qlib-ready"),
+            NoDataFetchedError("No data fetched"),
+            requests.HTTPError("503", response=response),
+            requests.ConnectionError("Max retries exceeded"),
+            pa.ArrowInvalid("Parquet magic bytes not found"),
+        )
+        for exc in failures:
+            with self.subTest(exc=type(exc).__name__):
+                self.assertEqual(cli_error_exit_code(exc), 1)
+
+    def test_run_daily_without_data_exits_1_not_as_a_config_error(self) -> None:
+        stderr = io.StringIO()
+        with (
+            mock.patch("sys.argv", ["jqqlib", "run-daily", "--config", "config.yaml", "--as-of", "2026-06-05"]),
+            mock.patch("jqqlib.pipeline.run_daily", side_effect=NoDataFetchedError("No data fetched for any day")),
+            contextlib.redirect_stderr(stderr),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            main()
+
+        self.assertEqual(raised.exception.code, 1)
+        self.assertEqual(stderr.getvalue(), "error: No data fetched for any day\n")
 
 
 if __name__ == "__main__":

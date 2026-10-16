@@ -12,6 +12,7 @@ import pandas as pd
 from jqqlib.config import QLIB_ADJUSTMENT_NONE
 from jqqlib.contracts import load_schema
 from jqqlib.manifest import (
+    _build_quality_inspection,
     _producer_git_commit,
     build_dataset_manifest,
     build_dataset_quality_report,
@@ -61,6 +62,7 @@ class DatasetManifestTests(unittest.TestCase):
                     "close": [1.0, 2.0, 3.0],
                     "volume": [100, 200, 300],
                     "amount": [1000, 2000, 3000],
+                    "adjustment_factor": [1.0, 1.0, 1.0],
                 }
             ).to_parquet(parquet_path, index=False)
             (qlib_dir / "calendars").mkdir(parents=True)
@@ -221,6 +223,7 @@ class DatasetManifestTests(unittest.TestCase):
                     "close": [1.0, None],
                     "volume": [100, None],
                     "amount": [1000, None],
+                    "adjustment_factor": [1.0, 1.0],
                 }
             ).to_parquet(parquet_path, index=False)
             (qlib_dir / "calendars").mkdir(parents=True)
@@ -301,6 +304,109 @@ class DatasetManifestTests(unittest.TestCase):
             dumped_factor = next(finding for finding in report["findings"] if finding["check"] == "dumped_factor")
             self.assertEqual(dumped_factor["severity"], "fail")
             self.assertGreater(report["checks"]["dumped_factor_invalid_rows"], 0)
+
+    def _seed_vendor_dataset(self, root: Path, *, adjustment_factor: list | None) -> tuple[Path, Path]:
+        parquet_path = root / "daily_quotes.parquet"
+        qlib_dir = root / "qlib_jp"
+        frame = pd.DataFrame(
+            {
+                "symbol": ["10010", "10010"],
+                "date": ["2024-01-04", "2024-01-05"],
+                "open": [1.0, 1.0],
+                "high": [1.1, 1.1],
+                "low": [0.9, 0.9],
+                "close": [1.0, 1.0],
+                "volume": [100, 100],
+                "amount": [1000, 1000],
+            }
+        )
+        if adjustment_factor is not None:
+            frame["adjustment_factor"] = adjustment_factor
+        frame.to_parquet(parquet_path, index=False)
+        (qlib_dir / "calendars").mkdir(parents=True)
+        (qlib_dir / "calendars" / "day.txt").write_text("2024-01-04\n2024-01-05\n", encoding="utf-8")
+        (qlib_dir / "instruments").mkdir()
+        (qlib_dir / "instruments" / "all.txt").write_text("10010\t2024-01-04\t2024-01-05\n", encoding="utf-8")
+        return parquet_path, qlib_dir
+
+    def test_quality_report_fails_when_the_vendor_factor_cannot_be_computed(self) -> None:
+        # vendor_factor promises $factor: a Parquet without a usable factor used
+        # to skip the check and report "pass".
+        for label, factor in (("missing column", None), ("null factor", [1.0, None])):
+            with self.subTest(label), tempfile.TemporaryDirectory() as tmpdir:
+                parquet_path, qlib_dir = self._seed_vendor_dataset(Path(tmpdir), adjustment_factor=factor)
+
+                report = build_dataset_quality_report(parquet_path=parquet_path, qlib_dir=qlib_dir)
+
+                self.assertEqual(report["status"], "fail")
+                finding = next(item for item in report["findings"] if item["check"] == "dumped_factor")
+                self.assertTrue(finding["detail"].startswith("Dumped factor cannot be computed: "), finding)
+                jsonschema.validate(report, load_schema("dataset_quality_report"))
+
+                none_report = build_dataset_quality_report(
+                    parquet_path=parquet_path, qlib_dir=qlib_dir, adjustment=QLIB_ADJUSTMENT_NONE
+                )
+                self.assertEqual(none_report["status"], "pass")
+
+    def test_quality_report_accepts_a_nullable_integer_factor_read_back_from_parquet(self) -> None:
+        # Parquet round trip of an Int64 adjustment_factor: the vectorised factor
+        # transform must not crash the report (it only catches ValueError).
+        with tempfile.TemporaryDirectory() as tmpdir:
+            parquet_path, qlib_dir = self._seed_vendor_dataset(
+                Path(tmpdir), adjustment_factor=pd.array([1, 1], dtype="Int64")
+            )
+            self.assertEqual(str(pd.read_parquet(parquet_path)["adjustment_factor"].dtype), "Int64")
+
+            report = build_dataset_quality_report(parquet_path=parquet_path, qlib_dir=qlib_dir)
+
+        self.assertEqual(report["status"], "pass")
+        self.assertEqual(report["checks"]["dumped_factor_invalid_rows"], 0)
+
+    def test_dataset_id_depends_on_the_adjustment_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            parquet_path, qlib_dir = self._seed_vendor_dataset(Path(tmpdir), adjustment_factor=[1.0, 1.0])
+            ids = {
+                adjustment: build_dataset_manifest(
+                    parquet_path=parquet_path, qlib_dir=qlib_dir, source={"kind": "test"}, adjustment=adjustment
+                )["dataset_id"]
+                for adjustment in ("vendor_factor", QLIB_ADJUSTMENT_NONE)
+            }
+
+        self.assertNotEqual(ids["vendor_factor"], ids[QLIB_ADJUSTMENT_NONE])
+
+    def test_manifest_lineage_binds_the_final_quality_report_bytes(self) -> None:
+        import hashlib
+        import json
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            parquet_path, qlib_dir = self._seed_vendor_dataset(Path(tmpdir), adjustment_factor=[1.0, 1.0])
+            manifest_path, quality_path = write_dataset_artifacts(
+                parquet_path=parquet_path, qlib_dir=qlib_dir, source={"kind": "test"}
+            )
+            report_sha256 = hashlib.sha256(quality_path.read_bytes()).hexdigest()
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+
+        lineage = manifest["lineage"]
+        self.assertEqual(lineage["quality_report_sha256"], report_sha256)
+        recorded_manifest_sha256 = lineage.pop("manifest_sha256")
+        canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+        self.assertEqual(recorded_manifest_sha256, hashlib.sha256(canonical.encode("utf-8")).hexdigest())
+
+    def test_write_dataset_artifacts_inspects_the_dataset_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            parquet_path, qlib_dir = self._seed_vendor_dataset(Path(tmpdir), adjustment_factor=[1.0, 1.0])
+            with patch(
+                "jqqlib.manifest._build_quality_inspection", wraps=_build_quality_inspection
+            ) as inspection:
+                write_dataset_artifacts(parquet_path=parquet_path, qlib_dir=qlib_dir, source={"kind": "test"})
+
+            self.assertEqual(inspection.call_count, 1)
+            manifest = read_dataset_manifest(qlib_dir)
+            report = read_dataset_quality_report(qlib_dir)
+        self.assertEqual(report["dataset_id"], manifest["dataset_id"])
+        self.assertEqual(report["status"], manifest["quality_status"])
+        jsonschema.validate(manifest, load_schema("dataset_manifest"))
+        jsonschema.validate(report, load_schema("dataset_quality_report"))
 
     def test_write_dataset_artifacts_writes_manifest_and_quality_report(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:

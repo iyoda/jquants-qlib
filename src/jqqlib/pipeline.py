@@ -11,7 +11,7 @@ import os
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib.resources import files as resource_files
 from pathlib import Path
 from typing import Any
@@ -19,9 +19,25 @@ from zoneinfo import ZoneInfo
 
 from . import __version__
 from .audit import GapAuditResult, audit_dataset_gaps, write_audit_sidecar
-from .config import load_config, publish_check_git_ref, qlib_adjustment
+from .config import (
+    PUBLISH_CHECK_BASELINE_FILE,
+    QLIB_ADJUSTMENT_VENDOR_FACTOR,
+    load_config,
+    publish_check_baseline,
+    publish_check_git_ref,
+    publish_check_ledger_path,
+    qlib_adjustment,
+)
 from .dump import parquet_to_qlib
-from .fetch import create_jquants_client, fetch_bulk_daily_quotes, fetch_daily_quotes
+from .fetch import _error_status, create_jquants_client, fetch_bulk_daily_quotes, fetch_daily_quotes
+from .ledger import (
+    LedgerError,
+    append_ledger_entry,
+    init_ledger,
+    jqqlib_source_commit,
+    ledger_entry_from_manifest,
+    read_ledger,
+)
 from .manifest import (
     DATASET_MANIFEST_FILENAME,
     DATASET_QUALITY_REPORT_FILENAME,
@@ -48,6 +64,7 @@ RunAllCallable = Callable[[Path, dt.date, dt.date], None]
 DatasetEndReader = Callable[[Path], dt.date | None]
 VALID_MERGE_MODES = {"replace", "upsert"}
 QUALITY_STATUSES = {"pass", "warning", "fail"}
+_AUTH_STATUSES = frozenset({401, 403})
 
 
 def _coerce_int(etl_conf: dict[str, Any], key: str, default: int) -> int:
@@ -80,6 +97,12 @@ def _coerce_float(etl_conf: dict[str, Any], key: str, default: float) -> float:
 
 
 def validate_etl_config(config: dict) -> dict[str, Any]:
+    """Return the ``etl`` settings with their defaults applied.
+
+    Raises ``ValueError`` when the configuration or its ``etl`` section is not a mapping, or a value is invalid: a
+    boolean, a non-integral count, a non-finite or negative number, ``chunk_days`` below 1,
+    ``retry_max_delay_sec`` below ``retry_base_delay_sec``, or an unknown ``merge_mode``.
+    """
     if not isinstance(config, dict):
         raise ValueError("configuration must be a mapping.")
     etl_conf = config.get("etl", {})
@@ -136,6 +159,7 @@ def _csv_source(csv_path: Path) -> dict[str, Any]:
 
 
 def run_etl(config_path: Path, start_date: dt.date, end_date: dt.date) -> Path:
+    """Fetch daily quotes of the configured universe and write them to the Parquet; return its path."""
     validate_date_range(start_date, end_date)
 
     config = load_config(config_path)
@@ -156,16 +180,27 @@ def run_etl(config_path: Path, start_date: dt.date, end_date: dt.date) -> Path:
         retry_jitter_sec=etl_conf["retry_jitter_sec"],
         request_interval_sec=etl_conf["request_interval_sec"],
     )
-    return write_parquet(df, parquet_dir, merge_mode=etl_conf["merge_mode"])
+    return write_parquet(
+        df,
+        parquet_dir,
+        merge_mode=etl_conf["merge_mode"],
+        require_adjustment_factor=qlib_adjustment(config) == QLIB_ADJUSTMENT_VENDOR_FACTOR,
+    )
 
 
 def run_bootstrap_csv(config_path: Path, csv_path: Path) -> Path:
+    """Load a bootstrap CSV into the Parquet, dump the Qlib provider and write the dataset artifacts.
+
+    Returns ``storage.qlib_dir``.
+    """
     config = load_config(config_path)
     parquet_dir = Path(config["storage"]["parquet_dir"])
     qlib_dir = Path(config["storage"]["qlib_dir"])
 
-    parquet_path = csv_to_parquet(csv_path, parquet_dir)
     adjustment = qlib_adjustment(config)
+    parquet_path = csv_to_parquet(
+        csv_path, parquet_dir, require_adjustment_factor=adjustment == QLIB_ADJUSTMENT_VENDOR_FACTOR
+    )
     parquet_to_qlib(parquet_path, qlib_dir, adjustment=adjustment)
     write_dataset_artifacts(
         parquet_path=parquet_path, qlib_dir=qlib_dir, source=_csv_source(csv_path), adjustment=adjustment
@@ -179,6 +214,10 @@ def download_bootstrap_csv(
     end_date: dt.date,
     output_path: Path,
 ) -> Path:
+    """Download bulk daily quotes into a bootstrap CSV and write its source manifest; return the CSV path.
+
+    Requires API-key authentication (``ClientV2``); raises ``ValueError`` otherwise.
+    """
     validate_date_range(start_date, end_date)
 
     config = load_config(config_path)
@@ -208,6 +247,7 @@ def download_bootstrap_csv(
 
 
 def run_all(config_path: Path, start_date: dt.date, end_date: dt.date) -> None:
+    """Run ``run_etl`` for the range, then dump the Qlib provider and write the dataset artifacts."""
     config = load_config(config_path)
     qlib_dir = Path(config["storage"]["qlib_dir"])
     codes = config.get("universe", {}).get("codes", [])
@@ -222,7 +262,23 @@ def run_all(config_path: Path, start_date: dt.date, end_date: dt.date) -> None:
     )
 
 
+def run_incremental(config_path: Path, start_date: dt.date, end_date: dt.date) -> None:
+    """``run_all`` for ``run-daily``: refuses ``etl.merge_mode: replace``.
+
+    The daily fetch window covers only the catch-up range, so replacing the
+    Parquet with it would discard all earlier history on every run.
+    """
+    config = load_config(config_path)
+    if _etl_config(config)["merge_mode"] != "upsert":
+        raise ValueError(
+            "run-daily requires etl.merge_mode: upsert; replace would discard the dataset history "
+            "outside the daily fetch window."
+        )
+    run_all(config_path, start_date, end_date)
+
+
 def read_existing_dataset_end(config_path: Path) -> dt.date | None:
+    """Return the last date in the configured Parquet, or ``None`` when it is missing or empty."""
     import pandas as pd
 
     config = load_config(config_path)
@@ -238,6 +294,10 @@ def read_existing_dataset_end(config_path: Path) -> dt.date | None:
 
 
 def catch_up_start_date(existing_dataset_end: dt.date | None, target_date: dt.date) -> dt.date:
+    """Return the day after ``existing_dataset_end``.
+
+    Returns ``target_date`` when there is no dataset yet or it already reaches ``target_date``.
+    """
     if existing_dataset_end is None or existing_dataset_end >= target_date:
         return target_date
     return existing_dataset_end + dt.timedelta(days=1)
@@ -266,22 +326,23 @@ def run_daily(
     config_path: Path,
     as_of: dt.date,
     max_lookback_business_days: int = 10,
-    runner: RunAllCallable = run_all,
+    runner: RunAllCallable = run_incremental,
     dataset_end_reader: DatasetEndReader = read_existing_dataset_end,
 ) -> dt.date:
+    """Import up to the latest XTKS session whose range has data; return that session, the end of the import.
+
+    The range starts the day after the dataset end, or at the session itself when there is no dataset yet or the
+    dataset already reaches it. ``runner`` gets the whole range at once and succeeds when any day in it has data,
+    even if the returned session itself has none. Only when the whole range is empty is the next earlier session
+    tried, up to ``max_lookback_business_days`` back. Raises ``NoDataFetchedError`` when every range is empty and
+    ``ExactCalendarRequired`` when the XTKS calendar is unavailable.
+    """
     last_no_data: NoDataFetchedError | None = None
     existing_dataset_end = dataset_end_reader(config_path)
 
     for target_date in iter_recent_business_dates(as_of, max_lookback_business_days):
         start_date = catch_up_start_date(existing_dataset_end, target_date)
         try:
-            # Fetch the full contiguous range [start_date, target_date] in a single
-            # call. write_parquet is atomic (tmp+replace) and the manifest derives
-            # its date_end from actual parquet content, so a failure here writes
-            # nothing and leaves the dataset end unchanged for the next run to
-            # refill -- no silently-advanced manifest with a hole. A run that
-            # finds no data anywhere in the range still raises NoDataFetchedError
-            # to drive the previous-business-day fallback below.
             if start_date < target_date:
                 logger.info(
                     "Catching up missing range %s to %s.",
@@ -321,6 +382,11 @@ def run_audit(
     window_business_days: int | None = None,
     max_lookback_business_days: int = 10,
 ) -> GapAuditResult:
+    """Audit the configured Parquet for missing recent XTKS sessions.
+
+    Without ``window_business_days`` the window is ``etl.audit_window_business_days`` (default 5), which must not
+    exceed ``max_lookback_business_days``.
+    """
     config = load_config(config_path)
     parquet_path = Path(config["storage"]["parquet_dir"]) / DEFAULT_PARQUET_FILENAME
     if window_business_days is None:
@@ -332,8 +398,10 @@ def decide_publish(current_hash: str | None, committed_hash: str | None) -> bool
     """Decide whether the dataset content changed and should be published.
 
     Compares the content-only ``lineage.parquet_sha256`` of the freshly built
-    dataset against what is committed on the configured ``publish_check.git_ref``
-    (default ``origin/main``). This is independent of
+    dataset against the baseline: the manifest committed on
+    ``publish_check.git_ref`` (default ``origin/main``) or the last entry of the
+    publish ledger (``publish_check.baseline: file``); ``evaluate_publish_check``
+    also compares the ``adjustment_policy``. This is independent of
     the per-run fetch window and of all manifest timestamps, so identical data
     never triggers a publish. A missing committed hash (first publish) counts as
     changed.
@@ -345,6 +413,13 @@ def decide_publish(current_hash: str | None, committed_hash: str | None) -> bool
 
 @dataclass(frozen=True)
 class PublishCheckDecision:
+    """Outcome of ``publish-check``.
+
+    ``returncode`` is 0 when the dataset changed, 3 when it is unchanged and 1 on an error; ``reason`` and the
+    remaining fields explain the decision. ``baseline`` is ``git`` or ``file``; ``ledger_path`` is set only for
+    ``file``.
+    """
+
     returncode: int
     reason: str
     current_hash: str | None = None
@@ -352,11 +427,15 @@ class PublishCheckDecision:
     quality_status: str | None = None
     warning_summary: str | None = None
     git_ref: str = "origin/main"
+    baseline: str = "git"
+    ledger_path: str | None = None
 
-
-def _manifest_repo_relpath(config: dict) -> str:
-    tracked = Path(config["storage"]["qlib_dir"]) / DATASET_MANIFEST_FILENAME
-    return os.path.normpath(str(tracked)).replace(os.sep, "/")
+    @property
+    def compared_against(self) -> str:
+        """Name the baseline for messages: the git ref, or ``ledger <path>`` for the file baseline."""
+        if self.baseline == PUBLISH_CHECK_BASELINE_FILE:
+            return f"ledger {self.ledger_path}"
+        return self.git_ref
 
 
 def _manifest_path(config: dict) -> Path:
@@ -379,49 +458,77 @@ def _read_json_object(path: Path, artifact_name: str) -> tuple[dict[str, Any] | 
     return payload, None
 
 
-def _committed_parquet_sha256(config: dict) -> str | None:
-    rel = _manifest_repo_relpath(config)
-    ref = publish_check_git_ref(config)
+class _CommittedManifestLookupFailed(Exception):
+    pass
 
-    def resolve_git_path(path: str, depth: int = 0) -> str | None:
+
+def _git(args: list[str], cwd: Path | None) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    except OSError as exc:
+        raise _CommittedManifestLookupFailed(f"git is not available: {exc}") from exc
+
+
+def _git_toplevel() -> Path:
+    result = _git(["rev-parse", "--show-toplevel"], cwd=None)
+    if result.returncode != 0:
+        raise _CommittedManifestLookupFailed(f"not inside a git work tree: {result.stderr.strip()}")
+    return Path(result.stdout.strip())
+
+
+def _manifest_path_from_repo_root(config: dict, toplevel: Path) -> str:
+    tracked = Path(os.path.abspath(Path(config["storage"]["qlib_dir"]) / DATASET_MANIFEST_FILENAME))
+    root = toplevel.resolve()
+    parts = tracked.parts
+    for size in range(len(parts) - 1, 0, -1):
+        if Path(*parts[:size]).resolve() == root:
+            return Path(*parts[size:]).as_posix()
+    raise _CommittedManifestLookupFailed(f"dataset manifest {tracked} is outside the git work tree {root}")
+
+
+def _committed_manifest(config: dict) -> dict[str, Any] | None:
+    ref = publish_check_git_ref(config)
+    toplevel = _git_toplevel()
+    if _git(["rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd=toplevel).returncode != 0:
+        raise _CommittedManifestLookupFailed(
+            f"publish_check.git_ref {ref!r} does not name a commit; fetch it or fix publish_check.git_ref"
+        )
+    rel = _manifest_path_from_repo_root(config, toplevel)
+
+    def read_committed_file_following_symlinks(path: str, depth: int = 0) -> str | None:
         if depth > 8:
             return None
-        result = subprocess.run(["git", "show", f"{ref}:{path}"], capture_output=True, text=True)
+        result = _git(["show", f"{ref}:{path}"], cwd=toplevel)
         if result.returncode == 0:
             return result.stdout
         parts = Path(path).parts
-        # Find a symlink in any parent component, replace it, then recurse, so a
-        # provider path committed as a symlink to a build directory still resolves.
         for size in range(len(parts) - 1, 0, -1):
             prefix = "/".join(parts[:size])
-            tree = subprocess.run(
-                ["git", "ls-tree", ref, "--", prefix], capture_output=True, text=True
-            )
+            tree = _git(["ls-tree", ref, "--", prefix], cwd=toplevel)
             entry = tree.stdout.strip().splitlines()
             if tree.returncode != 0 or len(entry) != 1:
                 continue
             mode = entry[0].split(None, 1)[0]
             if mode != "120000":
                 continue
-            probe = subprocess.run(["git", "show", f"{ref}:{prefix}"], capture_output=True, text=True)
+            probe = _git(["show", f"{ref}:{prefix}"], cwd=toplevel)
             if probe.returncode != 0:
                 continue
             target = probe.stdout.strip()
             if not target:
                 continue
             replaced = os.path.normpath(os.path.join(os.path.dirname(prefix), target, *parts[size:]))
-            return resolve_git_path(replaced.replace(os.sep, "/"), depth + 1)
+            return read_committed_file_following_symlinks(replaced.replace(os.sep, "/"), depth + 1)
         return None
 
-    content = resolve_git_path(rel)
+    content = read_committed_file_following_symlinks(rel)
     if content is None:
         return None
     try:
         data = json.loads(content)
     except json.JSONDecodeError:
         return None
-    lineage = data.get("lineage", {})
-    return lineage.get("parquet_sha256") if isinstance(lineage, dict) else None
+    return data if isinstance(data, dict) else None
 
 
 def _quality_warning_summary(report: dict[str, Any]) -> str | None:
@@ -457,9 +564,15 @@ def _publish_check_error(
     )
 
 
-def evaluate_publish_check(config_path: Path) -> PublishCheckDecision:
-    config = load_config(config_path)
+@dataclass(frozen=True)
+class _PublishableDataset:
+    manifest: dict[str, Any]
+    report: dict[str, Any]
+    current_hash: str
+    status: str
 
+
+def _check_current_dataset(config: dict) -> _PublishableDataset | PublishCheckDecision:
     manifest, reason = _read_json_object(_manifest_path(config), "dataset manifest")
     if reason is not None or manifest is None:
         return _publish_check_error(reason or "dataset manifest unavailable")
@@ -514,18 +627,131 @@ def evaluate_publish_check(config_path: Path) -> PublishCheckDecision:
             quality_status=str(report_status),
         )
 
-    committed = _committed_parquet_sha256(config)
-    warning_summary = _quality_warning_summary(report)
-    changed = decide_publish(current, committed)
+    return _PublishableDataset(manifest=manifest, report=report, current_hash=current, status=str(report_status))
+
+
+def evaluate_publish_check(config_path: Path) -> PublishCheckDecision:
+    """Compare the working-tree dataset manifest with the configured baseline.
+
+    The baseline is the manifest committed on ``publish_check.git_ref`` (``publish_check.baseline: git``, the
+    default) or the last entry of the ledger at ``publish_check.ledger_path`` (``file``); one is never a fallback
+    for the other. Fails closed with ``returncode`` 1 when the manifest or the quality report is missing,
+    unreadable or not a JSON object, the manifest lacks ``lineage.parquet_sha256``, a status is unknown or
+    ``fail``, the two disagree on status or ``dataset_id``, the git lookup cannot run (no git, not a work tree,
+    unknown ref, a manifest outside the work tree) or the ledger is missing or damaged. A committed manifest that
+    is absent or not valid JSON, or a ledger without entries, counts as a first publish (``returncode`` 0).
+    """
+    config = load_config(config_path)
+    return _with_configured_baseline(_decide_publish_check(config), config)
+
+
+def _with_configured_baseline(decision: PublishCheckDecision, config: dict) -> PublishCheckDecision:
+    return replace(
+        decision,
+        git_ref=publish_check_git_ref(config),
+        baseline=publish_check_baseline(config),
+        ledger_path=_configured_ledger_path(config),
+    )
+
+
+def _decide_publish_check(config: dict) -> PublishCheckDecision:
+    dataset = _check_current_dataset(config)
+    if isinstance(dataset, PublishCheckDecision):
+        return dataset
+    manifest, current, report_status = dataset.manifest, dataset.current_hash, dataset.status
+
+    try:
+        baseline_record = _baseline_for_publish_check(config)
+    except (_CommittedManifestLookupFailed, LedgerError) as exc:
+        return _publish_check_error(str(exc), current_hash=current, quality_status=report_status)
+    committed = baseline_record.parquet_sha256 if baseline_record else None
+    warning_summary = _quality_warning_summary(dataset.report)
+    adjustment_policy_changed = baseline_record is not None and (
+        manifest.get("adjustment_policy") != baseline_record.adjustment_policy
+    )
+    changed = decide_publish(current, committed) or adjustment_policy_changed
     return PublishCheckDecision(
         returncode=0 if changed else 3,
         reason="changed" if changed else "unchanged",
         current_hash=current,
         committed_hash=committed,
-        git_ref=publish_check_git_ref(config),
-        quality_status=str(report_status),
+        quality_status=report_status,
         warning_summary=warning_summary,
     )
+
+
+def append_current_dataset_to_ledger(config_path: Path) -> tuple[Path, bool]:
+    """Record the working-tree dataset in the publish ledger at ``publish_check.ledger_path``.
+
+    Runs the same dataset checks as ``publish-check`` first and raises ``LedgerError`` when they refuse the
+    dataset or the ledger is missing or damaged. Returns the ledger path and whether an entry was appended:
+    ``False`` when the last entry already records this dataset, so a re-run after a completed append is a no-op.
+    """
+    config = load_config(config_path)
+    path = publish_check_ledger_path(config)
+    dataset = _check_current_dataset(config)
+    if isinstance(dataset, PublishCheckDecision):
+        raise LedgerError(f"refusing to record the dataset in the publish ledger: {dataset.reason}")
+    entry = ledger_entry_from_manifest(
+        dataset.manifest,
+        jqqlib_version=__version__,
+        jqqlib_source_commit=jqqlib_source_commit(),
+    )
+    return path, append_ledger_entry(path, entry)
+
+
+def init_publish_ledger(config_path: Path, from_manifest: Path | None = None) -> Path:
+    """Create the publish ledger at ``publish_check.ledger_path``, empty or seeded from ``from_manifest``.
+
+    A seeded entry records no producer versions because the manifest does not say which jqqlib built it. Raises
+    ``FileExistsError`` when the ledger exists, ``OSError`` for an unreadable manifest, ``ValueError`` for a
+    manifest that is not a JSON object or cannot become an entry (no ``lineage.parquet_sha256``, no object
+    ``adjustment_policy``) and ``LedgerError`` when the ledger cannot be written.
+    """
+    config = load_config(config_path)
+    path = publish_check_ledger_path(config)
+    entry = None
+    if from_manifest is not None:
+        try:
+            manifest = json.loads(from_manifest.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"manifest {from_manifest} is not JSON: {exc}") from exc
+        if not isinstance(manifest, dict):
+            raise ValueError(f"manifest {from_manifest} is not a JSON object")
+        try:
+            entry = ledger_entry_from_manifest(manifest, jqqlib_version=None, jqqlib_source_commit=None)
+        except LedgerError as exc:
+            raise ValueError(f"manifest {from_manifest} cannot seed the publish ledger: {exc}") from exc
+    return init_ledger(path, entry)
+
+
+@dataclass(frozen=True)
+class _Baseline:
+    parquet_sha256: str | None
+    adjustment_policy: Any
+
+
+def _configured_ledger_path(config: dict) -> str | None:
+    if publish_check_baseline(config) != PUBLISH_CHECK_BASELINE_FILE:
+        return None
+    return str(publish_check_ledger_path(config))
+
+
+def _baseline_for_publish_check(config: dict) -> _Baseline | None:
+    if publish_check_baseline(config) == PUBLISH_CHECK_BASELINE_FILE:
+        entries = read_ledger(publish_check_ledger_path(config))
+        if not entries:
+            return None
+        return _Baseline(entries[-1]["parquet_sha256"], entries[-1].get("adjustment_policy"))
+    try:
+        committed_manifest = _committed_manifest(config)
+    except _CommittedManifestLookupFailed as exc:
+        raise _CommittedManifestLookupFailed(f"cannot read the committed manifest: {exc}") from exc
+    if committed_manifest is None:
+        return None
+    committed_lineage = committed_manifest.get("lineage", {})
+    committed = committed_lineage.get("parquet_sha256") if isinstance(committed_lineage, dict) else None
+    return _Baseline(committed, committed_manifest.get("adjustment_policy"))
 
 
 def run_publish_check(config_path: Path) -> int:
@@ -555,15 +781,16 @@ def publish_pathspecs(config_path: Path) -> list[str]:
 
 
 def parse_date(v: str) -> dt.date:
+    """Argparse type: parse a ``YYYY-MM-DD`` date."""
     return dt.datetime.strptime(v, "%Y-%m-%d").date()
 
 
 def _now(tz: dt.tzinfo) -> dt.datetime:
-    """Return the current time in ``tz``. Patchable so as-of tests can freeze the clock."""
     return dt.datetime.now(tz)
 
 
 def parse_as_of_date(v: str) -> dt.date:
+    """Argparse type for ``--as-of``: ``today`` is the current date in Asia/Tokyo, otherwise ``YYYY-MM-DD``."""
     if v == "today":
         return _now(ZoneInfo("Asia/Tokyo")).date()
     return parse_date(v)
@@ -593,7 +820,12 @@ def init_config(path: Path, *, force: bool = False) -> Path:
     return path
 
 
+def _accept_audit_only_flags_forwarded_by_the_daily_wrapper(run_daily_parser: argparse.ArgumentParser) -> None:
+    run_daily_parser.add_argument("--window-business-days", default=None, type=int, help=argparse.SUPPRESS)
+
+
 def build_parser() -> argparse.ArgumentParser:
+    """Build the ``jqqlib`` command-line parser."""
     parser = argparse.ArgumentParser(prog="jqqlib", description="J-Quants to Qlib dataset pipeline")
     parser.add_argument("--version", action="version", version=f"jqqlib {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -652,10 +884,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="As-of date (YYYY-MM-DD). 'today' is the current date in Asia/Tokyo, not the host local date.",
     )
     daily.add_argument("--max-lookback-business-days", default=10, type=int)
-    # Accepted but unused by run-daily: the daily wrapper forwards one shared
-    # arg list to both run-daily and audit, so run-daily must tolerate the
-    # audit-only flag rather than abort the whole job on an unknown argument.
-    daily.add_argument("--window-business-days", default=None, type=int, help=argparse.SUPPRESS)
+    _accept_audit_only_flags_forwarded_by_the_daily_wrapper(daily)
 
     audit = sub.add_parser(
         "audit",
@@ -673,10 +902,31 @@ def build_parser() -> argparse.ArgumentParser:
 
     publish_check = sub.add_parser(
         "publish-check",
-        help="Exit 0 if the dataset content changed vs publish_check.git_ref (default origin/main), "
-        "3 if unchanged (no-op gate)",
+        help="Exit 0 if the dataset content changed vs the baseline (publish_check.git_ref, default origin/main, "
+        "or the ledger with publish_check.baseline: file), 3 if unchanged (no-op gate)",
     )
     publish_check.add_argument("--config", required=True)
+
+    ledger_cmd = sub.add_parser(
+        "ledger",
+        help="Manage the publish ledger at publish_check.ledger_path (the file baseline of publish-check)",
+    )
+    ledger_sub = ledger_cmd.add_subparsers(dest="ledger_command", required=True)
+    ledger_init = ledger_sub.add_parser(
+        "init",
+        help="Create the ledger once: empty (next publish-check is a first publish) or seeded from a manifest",
+    )
+    ledger_init.add_argument("--config", required=True)
+    ledger_init.add_argument(
+        "--from-manifest",
+        default=None,
+        help="Seed the ledger with this dataset manifest, e.g. the last one published by the git baseline",
+    )
+    ledger_append = ledger_sub.add_parser(
+        "append",
+        help="Record the current dataset after a successful publish; a no-op when the last entry already has it",
+    )
+    ledger_append.add_argument("--config", required=True)
 
     publish = sub.add_parser("publish", help="Atomically publish a prepared Qlib dataset build via symlink")
     publish.add_argument("--build-provider-uri", required=True)
@@ -689,20 +939,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 class _BelowWarningFilter(logging.Filter):
-    """Keep WARNING+ off the stdout handler so they appear only on stderr."""
-
     def filter(self, record: logging.LogRecord) -> bool:
         return record.levelno < logging.WARNING
 
 
 def _configure_cli_logging() -> None:
-    """Attach stdout/stderr handlers for the ``jqqlib`` hierarchy at the CLI boundary.
-
-    Library importers see no handlers (silence by default). ``main()`` installs
-    these for the duration of one CLI invocation so progress ``INFO`` lines still
-    print on stdout and warnings on stderr, matching the previous ``print()``
-    behaviour. Never call ``logging.basicConfig`` from library code.
-    """
     if _CLI_HANDLERS:
         return
     root = logging.getLogger("jqqlib")
@@ -730,21 +971,50 @@ def _teardown_cli_logging() -> None:
     root.propagate = True
 
 
+def cli_error_exit_code(exc: BaseException) -> int:
+    """Exit code for an error reported as one ``error:`` line: 1 = run failure, 2 = user error.
+
+    ``ValueError``/``OSError`` are user errors (unreadable/invalid config, bad
+    arguments, refused overwrite, rejected credentials: HTTP 401/403) except
+    for the subclasses that report a failed run instead: no data fetched,
+    other J-Quants API/network errors (``requests`` exceptions subclass
+    ``OSError``), and unreadable Parquet (pyarrow errors subclass
+    ``ValueError``). ``RuntimeError`` is a dataset-state failure (e.g. data
+    that is not Qlib-ready), reported like a failed check.
+    """
+    if isinstance(exc, (RuntimeError, NoDataFetchedError)):
+        return 1
+    if isinstance(exc, Exception) and _error_status(exc) in _AUTH_STATUSES:
+        return 2
+    if _is_run_failure_from_an_already_imported_library(exc):
+        return 1
+    return 2
+
+
+_RUN_FAILURE_EXCEPTION_CLASSES = (("requests", "RequestException"), ("pyarrow", "ArrowException"))
+
+
+def _is_run_failure_from_an_already_imported_library(exc: BaseException) -> bool:
+    for module_name, class_name in _RUN_FAILURE_EXCEPTION_CLASSES:
+        error_class = getattr(sys.modules.get(module_name), class_name, None)
+        if isinstance(error_class, type) and isinstance(exc, error_class):
+            return True
+    return False
+
+
 def main() -> None:
+    """Entry point of the ``jqqlib`` console script.
+
+    Errors are printed as one ``error: <message>`` line on stderr instead of a traceback; the exit code comes from
+    ``cli_error_exit_code`` (2 = user error, 1 = failed run).
+    """
     args = build_parser().parse_args()
     _configure_cli_logging()
     try:
         _dispatch(args)
-    except (ValueError, OSError) as exc:
-        # User-facing failures (unreadable/invalid config, bad arguments, refused
-        # overwrite) get a one-line message instead of a traceback.
+    except (ValueError, OSError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
-        raise SystemExit(2) from None
-    except RuntimeError as exc:
-        # Dataset-state failures (e.g. a Qlib dump that produced no provider
-        # subtree) are reported like a failed check, not as a crash.
-        print(f"error: {exc}", file=sys.stderr)
-        raise SystemExit(1) from None
+        raise SystemExit(cli_error_exit_code(exc)) from None
     finally:
         _teardown_cli_logging()
 
@@ -818,8 +1088,6 @@ def _dispatch(args: argparse.Namespace) -> None:
                 max_lookback_business_days=args.max_lookback_business_days,
             )
         except ExactCalendarRequired as exc:
-            # Distinct from a gap: the audit could not run at all. rc=2 lets the
-            # daily wrapper alert on "calendar" instead of a phantom data gap.
             print(f"Audit failed: XTKS trading calendar unavailable: {exc}", file=sys.stderr)
             raise SystemExit(2) from exc
         try:
@@ -830,8 +1098,6 @@ def _dispatch(args: argparse.Namespace) -> None:
                 run_started_at=os.environ.get("JQQLIB_RUN_STARTED_AT", ""),
             )
         except OSError as exc:
-            # The sidecar is a monitoring artifact; its absence already reads as
-            # `audit: not_run` downstream and must not fail the import.
             print(f"Warning: could not write the audit sidecar {sidecar_path}: {exc}", file=sys.stderr)
         if result.suppressed_non_sessions:
             print("suppressed (XTKS non-session):")
@@ -849,12 +1115,25 @@ def _dispatch(args: argparse.Namespace) -> None:
         if decision.warning_summary:
             print(decision.warning_summary, file=sys.stderr)
         if rc == 0:
-            print(f"Dataset content changed vs {decision.git_ref}; publish required.")
+            print(f"Dataset content changed vs {decision.compared_against}; publish required.")
         elif rc == 3:
-            print(f"No dataset content change vs {decision.git_ref}; skipping publish.")
+            print(f"No dataset content change vs {decision.compared_against}; skipping publish.")
         else:
             print(f"publish-check error: {decision.reason}", file=sys.stderr)
         raise SystemExit(rc)
+    elif args.command == "ledger" and args.ledger_command == "init":
+        from_manifest = Path(args.from_manifest) if args.from_manifest else None
+        path = init_publish_ledger(Path(args.config), from_manifest)
+        if from_manifest is None:
+            print(f"Publish ledger initialised (empty): {path}")
+        else:
+            print(f"Publish ledger initialised: {path} (seeded from {from_manifest})")
+    elif args.command == "ledger" and args.ledger_command == "append":
+        path, appended = append_current_dataset_to_ledger(Path(args.config))
+        if appended:
+            print(f"Publish ledger entry appended: {path}")
+        else:
+            print(f"Publish ledger already records this dataset: {path}")
     elif args.command == "publish":
         published = publish_dataset_build(Path(args.build_provider_uri), Path(args.provider_uri))
         print(f"Published provider URI: {published}")

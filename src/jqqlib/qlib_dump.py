@@ -13,12 +13,15 @@ from qlib.utils import code_to_fname, fname_to_code
 
 
 def read_csv_data(file_path: Path, date_field_name: str) -> pd.DataFrame:
+    """Read one per-symbol CSV and parse ``date_field_name`` as datetimes."""
     df = pd.read_csv(file_path, low_memory=False)
     df[date_field_name] = pd.to_datetime(df[date_field_name])
     return df
 
 
 class DumpDataAll:
+    """Write a Qlib provider (calendar, instruments, feature bins) from one CSV per symbol."""
+
     INSTRUMENTS_START_FIELD = "start_datetime"
     INSTRUMENTS_END_FIELD = "end_datetime"
     INSTRUMENTS_SEP = "\t"
@@ -36,6 +39,11 @@ class DumpDataAll:
         file_suffix: str = ".csv",
         include_fields: Iterable[str] = (),
     ) -> None:
+        """Prepare a dump of ``data_path`` into ``qlib_dir``.
+
+        ``data_path`` is a directory of ``*file_suffix`` files, one per symbol, or a single file. Only
+        ``include_fields`` are written as feature bins.
+        """
         data_dir = Path(data_path).expanduser()
         self.df_files = sorted(data_dir.glob(f"*{file_suffix}")) if data_dir.is_dir() else [data_dir]
         self.qlib_dir = Path(qlib_dir).expanduser()
@@ -115,6 +123,7 @@ class DumpDataAll:
             np.hstack([date_index, aligned[field]]).astype("<f").tofile(str(bin_path.resolve()))
 
     def dump(self) -> None:
+        """Write the calendar, the instruments' date ranges and the feature bins of every input file."""
         all_datetimes: set[pd.Timestamp] = set()
         date_range_rows: list[str] = []
         for file_path in self.df_files:

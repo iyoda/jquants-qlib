@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jquants-qlib"
-version = "0.1.0"
+version = "0.2.0"
 description = "Daily ETL from the J-Quants API to Parquet and a Qlib dataset for Japanese equities"
 readme = "README.md"
 license = "MIT"
@@ -44,6 +44,7 @@ dev = [
   "build>=1.2",
   "twine>=6.1",
   "coverage>=7.5",
+  "lefthook>=2.2",
   "pandas-stubs",
   "types-PyYAML",
   "types-requests",
@@ -71,11 +72,17 @@ line-length = 120
 target-version = "py310"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "B", "UP"]
+select = ["E", "F", "I", "B", "UP", "D1", "ERA001", "PGH003", "PGH004", "RUF100"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/**" = ["D1"]
+"tests/**" = ["D1"]
 
 [tool.mypy]
 # mypy checks all of `src/jqqlib`; `scripts/` and `tests/` are not yet type-checked.
 files = ["src/jqqlib"]
+enable_error_code = ["ignore-without-code"]
+warn_unused_ignores = true
 # `python_version = "3.10"` is not usable here: current numpy stubs use 3.12-only syntax.
 # The CI test matrix (3.10-3.12) is the guard against 3.11+-only stdlib APIs such as datetime.UTC.
 

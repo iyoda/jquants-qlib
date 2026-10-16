@@ -6,6 +6,93 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-16
+
+### Added
+
+- `publish_check.baseline: file` compares `publish-check` against the last entry of a JSON Lines
+  publish ledger at `publish_check.ledger_path` instead of the manifest committed on `git_ref`, so
+  an operations repository no longer has to commit and push the manifest. The default stays `git`;
+  one baseline is never a fallback for the other. A missing or damaged ledger is an error (exit 1),
+  not a first publish; an empty ledger is.
+- `jqqlib ledger init [--from-manifest PATH]` creates the ledger once (empty, or seeded from a
+  manifest such as the last one published by the git baseline), and `jqqlib ledger append` records
+  the current dataset after a successful publish. `append` runs the `publish-check` dataset checks,
+  rewrites the ledger atomically under a lock and appends nothing when the last entry already
+  records the dataset. Entries carry `jqqlib_version` and, when the package is the `src/jqqlib`
+  directory of a jquants-qlib work tree, `jqqlib_source_commit`; neither takes part in the change
+  decision. Symlinked ledgers and entries with missing fields are refused.
+
+### Fixed
+
+- API retries no longer repeat 4xx client errors: `requests.HTTPError` subclasses `OSError`, so
+  401/403/404 (and the 400 that triggers the per-day fallback) were retried with backoff. Errors
+  carrying an HTTP status are now classified by status first; only 429/5xx are retried.
+- `run-daily` refuses `etl.merge_mode: replace` (exit 2), which cut the Parquet down to the daily
+  fetch window on every run.
+- Parquet writes (`run-etl`, `run-all`, `run-daily`, `bootstrap-csv`) run the `validate` readiness
+  checks on the merged rows first and leave the Parquet unchanged on failure (exit 1). Previously
+  rejected rows (e.g. `AdjFactor` 0) were written before the dump refused them, so `run-daily`
+  resumed after them and failed on every later run.
+- `publish-check` reports an error (exit 1) instead of "changed" (exit 0) when it cannot look up
+  the committed manifest: `git` missing, not a git work tree, or a `publish_check.git_ref` that
+  does not name a commit. It also maps the manifest path to the repository root, so an absolute
+  `storage.qlib_dir` or a run from a subdirectory no longer reports "changed" on every run.
+- The Qlib subtree swap restores the previous `features` / `calendars` / `instruments` when it is
+  interrupted (e.g. Ctrl-C), and keeps the backups if the restore itself fails; previously an
+  interrupt deleted them.
+- The Qlib dump stages its build next to the resolved `storage.qlib_dir`, so a `qlib_dir` that is
+  a symlink to another filesystem no longer fails with `Invalid cross-device link`.
+- Fundamentals disclosures of one code that take effect on the same day (e.g. results and a
+  forecast revision on one `DiscDate`) are merged field by field in `DiscDate` / `DiscTime` (as a
+  time of day) / `DiscNo` (as an integer) order, latest non-null value first; a missing or
+  unparsable key counts as the earliest. Previously one whole row was kept, chosen by input
+  order, so the new `NP` or the new `FNP` stayed stale until the next disclosure. Re-run
+  `run-fundamentals-etl` to rebuild the panel.
+- With `qlib.adjustment: vendor_factor`, the quality report fails (`dumped_factor`) when the
+  factor cannot be computed (no `adjustment_factor` column, or null factors) instead of skipping
+  the check and reporting `pass`.
+- `publish-check` also compares the manifests' `adjustment_policy`, so switching
+  `qlib.adjustment` (same Parquet, different Qlib dataset) is a change, not "unchanged".
+- `dataset_id` includes the adjustment mode, so the same Parquet dumped in both modes gets two
+  ids. Existing ids change once on the next build.
+- Building the manifest and quality report reads the Parquet and runs the quality inspection once
+  instead of twice, and the vendor-factor transform is vectorised (about 8x faster on 1M rows,
+  same values and row order; a nullable integer factor is computed in float64).
+
+### Changed
+
+- **Breaking (missing vendor factor):** with `qlib.adjustment: vendor_factor` (the default),
+  `run-etl` / `run-all` / `run-daily` / `bootstrap-csv` refuse source data that has no `AdjFactor`
+  / `AdjustmentFactor` column (`error: Source data has no AdjFactor/AdjustmentFactor column...`,
+  exit 1, Parquet unchanged). Previously every row silently got factor 1.0, so splits were
+  dumped unadjusted. Null or non-numeric factors on individual rows still become 1.0, now with a
+  `Filled N null or non-numeric AdjFactor values with 1.0.` warning on stderr; with
+  `qlib.adjustment: none` a source without the column still gets 1.0, with a warning.
+  - Affected: `bootstrap-csv` from a CSV without a factor column (e.g. a hand-made or third-party
+    CSV) in the default mode. J-Quants API responses and `download-csv` CSVs carry the column.
+  - Required changes: re-download the CSV with `download-csv`, add the vendor factor column, or
+    set `qlib.adjustment: none` for raw prices.
+  - Data: existing Parquet is unchanged; it may already hold 1.0 factors from such a source, so
+    rebuild it from a source with factors if split adjustment matters.
+  - Validate / roll back: `jqqlib bootstrap-csv` then `jqqlib validate` exit 0; rolling back to
+    the previous release restores the silent 1.0 fill.
+
+- **Breaking (CLI exit codes):** J-Quants API / network errors (`requests` exceptions), no data
+  (within the `run-daily` lookback, or no fundamentals), and unreadable Parquet now exit 1 (failed
+  run) instead of 2. Exit 2 is left to configuration and argument errors, rejected credentials
+  (HTTP 401/403), and the XTKS calendar outage of `run-daily` / `audit`, so a wrapper can treat 2
+  as "fix the setup" and 1 as "the run failed". The fundamentals CLI follows the same mapping and
+  reports runtime errors as one `error:` line instead of a traceback. `publish-check` now exits 1
+  where it used to exit 0 when the committed manifest cannot be looked up (see Fixed).
+  - Affected: wrappers or monitors that branch on exit code 2 for API outages or "no data", or
+    that rely on `publish-check` exit 0 with a missing or unfetched `publish_check.git_ref`.
+  - Required changes: alert on exit 1 for those cases; make sure `publish_check.git_ref` exists
+    (fetch it, or push an initial commit before the first publish).
+  - Data: no regeneration needed; Parquet, Qlib datasets and artifacts are unchanged.
+  - Validate / roll back: `jqqlib publish-check --config config.yaml; echo $?` should print 0 or 3
+    on a healthy setup. Rolling back to 0.1.0 restores the previous codes.
+
 ## [0.1.0] - 2026-09-16
 
 ### Added
