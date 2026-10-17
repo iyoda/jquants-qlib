@@ -280,5 +280,32 @@ class FetchFundamentalsResumeCacheTests(unittest.TestCase):
             self.assertEqual(sorted(cached["Code"].unique()), ["10010"])
 
 
+    def test_rows_cached_before_the_attempted_record_was_written_are_not_duplicated_on_resume(self) -> None:
+        class Client:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def get_fin_summary(self, code: str) -> pd.DataFrame:
+                self.calls.append(code)
+                return pd.DataFrame({"DiscDate": ["2026-06-02"], "DiscNo": [f"{code}-1"], "Eq": [1.0]})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / "fundamentals_raw_cache.parquet"
+            cached = pd.DataFrame({"DiscDate": ["2026-06-02"], "DiscNo": ["10010-1"], "Eq": [1.0], "Code": ["10010"]})
+            cached.to_parquet(cache_path, index=False)
+            client = Client()
+
+            df = fetch_fundamentals(
+                client,
+                ["10010", "10020"],
+                request_interval_sec=0.0,
+                sleeper=lambda _: None,
+                cache_path=cache_path,
+            )
+
+            self.assertEqual(client.calls, ["10010", "10020"])
+            self.assertEqual(sorted(df["Code"]), ["10010", "10020"])
+            self.assertEqual(sorted(pd.read_parquet(cache_path)["Code"]), ["10010", "10020"])
+
 if __name__ == "__main__":
     unittest.main()
