@@ -6,6 +6,13 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
 
 ## [Unreleased]
 
+### Fixed
+
+- `run-fundamentals-etl` no longer duplicates a code's rows in `fundamentals_raw_cache.parquet` when
+  a run is killed after a checkpoint replaced the cache but before it recorded the attempted codes.
+  On resume, cached rows of codes missing from the attempted record are dropped, since the run
+  queries those codes again.
+
 ## [0.2.0] - 2026-10-16
 
 ### Added

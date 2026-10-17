@@ -15,13 +15,14 @@ if TYPE_CHECKING:
     from jquantsapi import ClientV2
 
 
-def _read_cache(cache_path: Path) -> list[pd.DataFrame]:
+def _read_cache(cache_path: Path, attempted: set[str]) -> list[pd.DataFrame]:
     import pandas as pd
 
     if not cache_path.exists():
         return []
     cached = pd.read_parquet(cache_path)
-    return [cached] if not cached.empty else []
+    committed = cached[cached["Code"].astype(str).isin(attempted)]
+    return [committed] if not committed.empty else []
 
 
 def _atomic_write_parquet(df: pd.DataFrame, path: Path) -> None:
@@ -86,9 +87,9 @@ def fetch_fundamentals(
     """
     import pandas as pd
 
-    cached_frames = _read_cache(cache_path) if cache_path is not None else []
     attempted_path = _attempted_codes_sidecar_path(cache_path) if cache_path is not None else None
     attempted = _read_attempted(attempted_path) if attempted_path is not None else set()
+    cached_frames = _read_cache(cache_path, attempted) if cache_path is not None else []
 
     todo = [str(code) for code in codes if str(code) not in attempted]
     if max_new_codes is not None:

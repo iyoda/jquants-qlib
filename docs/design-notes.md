@@ -208,10 +208,14 @@ PIT の規則そのものは [財務](fundamentals.md#pitpoint-in-timeの意味)
   開示がまだ無い銘柄（ETF、REIT、新規上場など）は空の応答を返してデータのキャッシュに現れないので、
   キャッシュだけを「処理済み」とみなすと、再開のたびに同じ銘柄を問い合わせ続けてしまうためです。
   例外で終わった呼び出しは結果が分からないので、試行済みにしません。
+- 再開時は、キャッシュの行のうち試行済みの記録にある銘柄の行だけを読みます。チェックポイントはキャッシュを
+  置き換えてから試行済みの記録を書くので、その間で止まると、記録に無い銘柄の行がキャッシュに残ります。
+  次の実行はその銘柄を問い合わせ直すため、残った行を読むと同じ行が二重になります。
 - `Code` 列は応答の値に関係なく要求した銘柄コードで上書きし、結合キーを揃えます（財務データの事前調査で
   確かめた挙動に合わせたもの）。
-  テスト（上の 2 項目）: `tests/test_fundamentals_fetch_retry.py` の
+  テスト（上の 3 項目）: `tests/test_fundamentals_fetch_retry.py` の
   `test_codes_with_empty_response_are_not_requeried_on_resume`、
+  `test_rows_cached_before_the_attempted_record_was_written_are_not_duplicated_on_resume`、
   `test_code_whose_request_raised_is_requested_again_on_resume`、`test_join_key_is_forced_to_the_requested_code`
 - `CARRY_NUM`（V2 `/fins/summary` の列）は、実データでの取得（ユニバース 500 銘柄中 483 銘柄、
   `pit_violations == 0`）で確かめてから固定した集合です。項目を増やすときは同じ確認をしてください。
