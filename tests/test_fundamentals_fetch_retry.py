@@ -2,8 +2,13 @@ from __future__ import annotations
 
 import itertools
 import json
+import os
+import signal
+import subprocess
+import sys
 import tempfile
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from unittest import mock
 
@@ -307,45 +312,49 @@ class FetchFundamentalsResumeCacheTests(unittest.TestCase):
 
 
 class FetchFundamentalsKilledRunTests(unittest.TestCase):
+    CODES = ["10010", "9999", "10020"]
+
     def test_run_killed_at_any_cache_write_resumes_to_the_same_single_file_cache(self) -> None:
-        codes = ["10010", "9999", "10020"]
-        reference = fetch_fundamentals(_RecordingClient(), codes, request_interval_sec=0.0, sleeper=lambda _: None)
-
-        cases = itertools.product((False, True), (1, 2), (False, True))
-        for from_0_2_cache, checkpoint_every, kill_after_replace in cases:
-            to_query = codes[1:] if from_0_2_cache else codes
+        for from_0_2_cache, checkpoint_every, kill_after in itertools.product((False, True), (1, 2), (False, True)):
             replace_number = 1
-            while True:
-                with self.subTest(
-                    from_0_2_cache=from_0_2_cache,
-                    checkpoint_every=checkpoint_every,
-                    replace_number=replace_number,
-                    kill_after_replace=kill_after_replace,
-                ):
-                    with tempfile.TemporaryDirectory() as tmp:
-                        cache_dir = Path(tmp)
-                        if from_0_2_cache:
-                            history = _disclosures("10010")
-                            _write_0_2_cache(cache_dir, pd.concat([history, history], ignore_index=True), ["10010"])
-                        killed = _run_killed_at_replace(
-                            codes, cache_dir, replace_number, kill_after_replace, checkpoint_every
-                        )
-                        committed_writes = replace_number if kill_after_replace else replace_number - 1
-                        committed = to_query[: committed_writes * checkpoint_every] if killed else to_query
-                        resumed_client, next_client = _RecordingClient(), _RecordingClient()
-
-                        resumed = fetch_fundamentals(resumed_client, codes, **_cache_options(cache_dir))
-                        next_run = fetch_fundamentals(next_client, codes, **_cache_options(cache_dir))
-
-                        self.assertEqual(resumed_client.calls, [code for code in to_query if code not in committed])
-                        self.assertEqual(next_client.calls, [])
-                        assert_frame_equal(resumed, reference)
-                        assert_frame_equal(next_run, reference)
-                        self.assertEqual(sorted(p.name for p in cache_dir.iterdir()), [CACHE_FILENAME])
-                if not killed:
-                    break
+            while self._resumes_after_kill(_run_killed_at_replace, from_0_2_cache, checkpoint_every, replace_number,
+                                           kill_after):
                 replace_number += 1
             self.assertGreater(replace_number, 1)
+
+    def test_run_sigkilled_at_a_cache_write_resumes_to_the_same_single_file_cache(self) -> None:
+        for kill_after in (False, True):
+            self.assertTrue(self._resumes_after_kill(_run_sigkilled_at_replace, True, 1, 1, kill_after))
+
+    def _resumes_after_kill(
+        self, run_killed: Callable[..., bool], from_0_2_cache: bool, checkpoint_every: int, replace_number: int,
+        kill_after: bool,
+    ) -> bool:
+        codes = self.CODES
+        to_query = codes[1:] if from_0_2_cache else codes
+        reference = fetch_fundamentals(_RecordingClient(), codes, request_interval_sec=0.0, sleeper=lambda _: None)
+        with self.subTest(
+            from_0_2_cache=from_0_2_cache, checkpoint_every=checkpoint_every, replace_number=replace_number,
+            kill_after=kill_after,
+        ), tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            if from_0_2_cache:
+                history = _disclosures("10010")
+                _write_0_2_cache(cache_dir, pd.concat([history, history], ignore_index=True), ["10010"])
+            killed = run_killed(codes, cache_dir, replace_number, kill_after, checkpoint_every)
+            committed_writes = replace_number if kill_after else replace_number - 1
+            committed = to_query[: committed_writes * checkpoint_every] if killed else to_query
+            resumed_client, next_client = _RecordingClient(), _RecordingClient()
+
+            resumed = fetch_fundamentals(resumed_client, codes, **_cache_options(cache_dir))
+            next_run = fetch_fundamentals(next_client, codes, **_cache_options(cache_dir))
+
+            self.assertEqual(resumed_client.calls, [code for code in to_query if code not in committed])
+            self.assertEqual(next_client.calls, [])
+            assert_frame_equal(resumed, reference)
+            assert_frame_equal(next_run, reference)
+            self.assertEqual(sorted(p.name for p in cache_dir.iterdir()), [CACHE_FILENAME])
+        return killed
 
 
 class FetchFundamentalsLegacyCacheTests(unittest.TestCase):
@@ -462,8 +471,17 @@ class _Killed(BaseException):
     pass
 
 
+def _raise_killed() -> None:
+    raise _Killed
+
+
+def _sigkill() -> None:
+    os.kill(os.getpid(), signal.SIGKILL)
+
+
 def _run_killed_at_replace(
-    codes: list[str], cache_dir: Path, replace_number: int, kill_after: bool, checkpoint_every: int
+    codes: list[str], cache_dir: Path, replace_number: int, kill_after: bool, checkpoint_every: int,
+    die: Callable[[], None] = _raise_killed,
 ) -> bool:
     real_replace = Path.replace
     count = 0
@@ -472,10 +490,10 @@ def _run_killed_at_replace(
         nonlocal count
         count += 1
         if count == replace_number and not kill_after:
-            raise _Killed
+            die()
         replaced = real_replace(self, target)
         if count == replace_number:
-            raise _Killed
+            die()
         return replaced
 
     with mock.patch.object(Path, "replace", replace_then_maybe_die):
@@ -484,6 +502,24 @@ def _run_killed_at_replace(
         except _Killed:
             return True
     return False
+
+
+_SIGKILLED_CHILD = (
+    "import json, sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); "
+    "from test_fundamentals_fetch_retry import _run_killed_at_replace, _sigkill; "
+    "codes, cache_dir, *rest = json.loads(sys.argv[2]); "
+    "_run_killed_at_replace(codes, Path(cache_dir), *rest, die=_sigkill)"
+)
+
+
+def _run_sigkilled_at_replace(
+    codes: list[str], cache_dir: Path, replace_number: int, kill_after: bool, checkpoint_every: int
+) -> bool:
+    args = json.dumps([codes, str(cache_dir), replace_number, kill_after, checkpoint_every])
+    child = subprocess.run([sys.executable, "-c", _SIGKILLED_CHILD, str(Path(__file__).parent), args], check=False)
+    if child.returncode not in (0, -signal.SIGKILL):
+        raise AssertionError(f"killed run exited with {child.returncode}")
+    return child.returncode == -signal.SIGKILL
 
 
 if __name__ == "__main__":
