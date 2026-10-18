@@ -312,30 +312,38 @@ class FetchFundamentalsResumeCacheTests(unittest.TestCase):
 class FetchFundamentalsKilledRunTests(unittest.TestCase):
     def test_run_killed_at_any_cache_write_resumes_to_the_same_single_file_cache(self) -> None:
         codes = ["10010", "9999", "10020"]
-        with tempfile.TemporaryDirectory() as tmp:
-            reference = fetch_fundamentals(_RecordingClient(), codes, **_cache_options(Path(tmp) / "reference"))
+        reference = fetch_fundamentals(_RecordingClient(), codes, request_interval_sec=0.0, sleeper=lambda _: None)
 
-        for from_0_2_cache, kill_after_replace in itertools.product((False, True), (False, True)):
+        cases = itertools.product((False, True), (1, 2), (False, True))
+        for from_0_2_cache, checkpoint_every, kill_after_replace in cases:
+            to_query = codes[1:] if from_0_2_cache else codes
             replace_number = 1
             while True:
                 with self.subTest(
-                    from_0_2_cache=from_0_2_cache, replace_number=replace_number, kill_after_replace=kill_after_replace
+                    from_0_2_cache=from_0_2_cache,
+                    checkpoint_every=checkpoint_every,
+                    replace_number=replace_number,
+                    kill_after_replace=kill_after_replace,
                 ):
                     with tempfile.TemporaryDirectory() as tmp:
                         cache_dir = Path(tmp)
                         if from_0_2_cache:
                             history = _disclosures("10010")
                             _write_0_2_cache(cache_dir, pd.concat([history, history], ignore_index=True), ["10010"])
-                        killed = _run_killed_at_replace(codes, cache_dir, replace_number, kill_after_replace)
+                        killed = _run_killed_at_replace(
+                            codes, cache_dir, replace_number, kill_after_replace, checkpoint_every
+                        )
+                        committed_writes = replace_number if kill_after_replace else replace_number - 1
+                        committed = to_query[: committed_writes * checkpoint_every] if killed else to_query
                         resumed_client, next_client = _RecordingClient(), _RecordingClient()
 
                         resumed = fetch_fundamentals(resumed_client, codes, **_cache_options(cache_dir))
                         next_run = fetch_fundamentals(next_client, codes, **_cache_options(cache_dir))
 
-                        self.assertEqual(sorted(resumed["Code"]), sorted(reference["Code"]))
-                        self.assertEqual(int(resumed.duplicated(subset=["Code", "DiscNo"]).sum()), 0)
+                        self.assertEqual(resumed_client.calls, [code for code in to_query if code not in committed])
                         self.assertEqual(next_client.calls, [])
-                        assert_frame_equal(resumed, next_run)
+                        assert_frame_equal(resumed, reference)
+                        assert_frame_equal(next_run, reference)
                         self.assertEqual(sorted(p.name for p in cache_dir.iterdir()), [CACHE_FILENAME])
                 if not killed:
                     break
@@ -366,10 +374,15 @@ class FetchFundamentalsLegacyCacheTests(unittest.TestCase):
             _write_0_2_cache(cache_dir, pd.concat([_disclosures("10010"), _disclosures("10020")]), ["10010"])
             client = _RecordingClient()
 
+            next_client = _RecordingClient()
+
             df = fetch_fundamentals(client, ["10010", "10020"], **_cache_options(cache_dir))
+            next_run = fetch_fundamentals(next_client, ["10010", "10020"], **_cache_options(cache_dir))
 
             self.assertEqual(client.calls, ["10020"])
             self.assertEqual(sorted(df["Code"]), ["10010", "10010", "10020", "10020"])
+            self.assertEqual(next_client.calls, [])
+            assert_frame_equal(df, next_run)
 
     def test_0_2_rows_of_an_unrecorded_code_that_now_returns_empty_do_not_come_back(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -432,13 +445,13 @@ class _RecordingClient:
         return _disclosures(code).drop(columns=["Code"])
 
 
-def _cache_options(cache_dir: Path) -> dict:
+def _cache_options(cache_dir: Path, checkpoint_every: int = 1) -> dict:
     cache_dir.mkdir(parents=True, exist_ok=True)
     return {
         "request_interval_sec": 0.0,
         "sleeper": lambda _: None,
         "cache_path": cache_dir / CACHE_FILENAME,
-        "checkpoint_every": 1,
+        "checkpoint_every": checkpoint_every,
     }
 
 
@@ -455,10 +468,12 @@ _KILLED_CHILD = (
 )
 
 
-def _run_killed_at_replace(codes: list[str], cache_dir: Path, replace_number: int, kill_after: bool) -> bool:
+def _run_killed_at_replace(
+    codes: list[str], cache_dir: Path, replace_number: int, kill_after: bool, checkpoint_every: int
+) -> bool:
     child = subprocess.run(
         [sys.executable, "-c", _KILLED_CHILD, str(Path(__file__).parent), str(cache_dir), str(replace_number),
-         "after" if kill_after else "before", *codes],
+         "after" if kill_after else "before", str(checkpoint_every), *codes],
         check=False,
     )
     if child.returncode not in (0, -signal.SIGKILL):
@@ -467,7 +482,7 @@ def _run_killed_at_replace(codes: list[str], cache_dir: Path, replace_number: in
 
 
 def _run_until_killed_at_replace(args: list[str]) -> None:
-    cache_dir, replace_number, when, *codes = args
+    cache_dir, replace_number, when, checkpoint_every, *codes = args
     real_replace = os.replace
     count = 0
 
@@ -481,7 +496,7 @@ def _run_until_killed_at_replace(args: list[str]) -> None:
             os.kill(os.getpid(), signal.SIGKILL)
 
     os.replace = replace_then_maybe_die
-    fetch_fundamentals(_RecordingClient(), codes, **_cache_options(Path(cache_dir)))
+    fetch_fundamentals(_RecordingClient(), codes, **_cache_options(Path(cache_dir), int(checkpoint_every)))
 
 
 if __name__ == "__main__":
