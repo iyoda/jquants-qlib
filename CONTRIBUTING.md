@@ -117,7 +117,7 @@ python -m venv "$dist_tmp/venv-sdist"
 ```
 
 Run the smoke without `PYTHONPATH` pointing at the checkout. It verifies the installed `jqqlib`
-console script (`jqqlib --version` must equal the installed distribution version), `py.typed`, both
+console script (`jqqlib --version` must equal the installed distribution version), `py.typed`, all
 packaged schemas, and a CSV → Parquet → Qlib conversion using only the installed wheel. CI runs
 exactly this for both the original wheel and the wheel rebuilt from the sdist.
 The sdist ships the full `tests/` and `scripts/` trees (`graft tests` / `graft scripts` in

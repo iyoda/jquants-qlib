@@ -45,6 +45,7 @@ from .manifest import (
     read_csv_source_manifest,
     write_csv_source_manifest,
     write_dataset_artifacts,
+    write_json_atomic,
 )
 from .publish import publish_dataset_build
 from .store import (
@@ -824,6 +825,16 @@ def _accept_audit_only_flags_forwarded_by_the_daily_wrapper(run_daily_parser: ar
     run_daily_parser.add_argument("--window-business-days", default=None, type=int, help=argparse.SUPPRESS)
 
 
+def _add_result_json_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--result-json",
+        default=None,
+        type=Path,
+        metavar="PATH",
+        help="Also write the outcome and exit code as JSON to PATH (schema: contracts/cli_result.schema.json).",
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the ``jqqlib`` command-line parser."""
     parser = argparse.ArgumentParser(prog="jqqlib", description="J-Quants to Qlib dataset pipeline")
@@ -885,6 +896,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     daily.add_argument("--max-lookback-business-days", default=10, type=int)
     _accept_audit_only_flags_forwarded_by_the_daily_wrapper(daily)
+    _add_result_json_flag(daily)
 
     audit = sub.add_parser(
         "audit",
@@ -899,6 +911,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     audit.add_argument("--window-business-days", default=None, type=int)
     audit.add_argument("--max-lookback-business-days", default=10, type=int)
+    _add_result_json_flag(audit)
 
     publish_check = sub.add_parser(
         "publish-check",
@@ -1009,14 +1022,61 @@ def main() -> None:
     ``cli_error_exit_code`` (2 = user error, 1 = failed run).
     """
     args = build_parser().parse_args()
+    result_json = getattr(args, "result_json", None)
     _configure_cli_logging()
     try:
         _dispatch(args)
+    except SystemExit as exc:
+        if result_json is not None:
+            _write_cli_result(result_json, args.command, _outcome_of_exit(args.command, exc), _exit_status(exc), None)
+        raise
     except (ValueError, OSError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
-        raise SystemExit(cli_error_exit_code(exc)) from None
+        exit_code = cli_error_exit_code(exc)
+        if result_json is not None:
+            _write_cli_result(result_json, args.command, "failed", exit_code, str(exc))
+        raise SystemExit(exit_code) from None
+    else:
+        if result_json is not None:
+            _write_cli_result(result_json, args.command, "completed", 0, None)
     finally:
         _teardown_cli_logging()
+
+
+_CLI_RESULT_SCHEMA_VERSION = 1
+
+
+def _exit_status(exc: SystemExit) -> int:
+    if exc.code is None:
+        return 0
+    if isinstance(exc.code, int):
+        return exc.code
+    return 1
+
+
+def _outcome_of_exit(command: str, exc: SystemExit) -> str:
+    status = _exit_status(exc)
+    if isinstance(exc.__cause__, ExactCalendarRequired):
+        return "calendar_unavailable"
+    if status == 0:
+        return "completed"
+    if command == "audit" and status == 1:
+        return "gaps"
+    return "failed"
+
+
+def _write_cli_result(path: Path, command: str, outcome: str, exit_code: int, error: str | None) -> None:
+    payload = {
+        "schema_version": _CLI_RESULT_SCHEMA_VERSION,
+        "command": command,
+        "outcome": outcome,
+        "exit_code": exit_code,
+        "error": error,
+    }
+    try:
+        write_json_atomic(path, payload)
+    except OSError as exc:
+        print(f"Warning: could not write the result JSON {path}: {exc}", file=sys.stderr)
 
 
 def _dispatch(args: argparse.Namespace) -> None:

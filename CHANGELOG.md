@@ -6,6 +6,16 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
 
 ## [Unreleased]
 
+### Added
+
+- `run-daily` and `audit` accept `--result-json PATH` and write
+  `{"schema_version": 1, "command", "outcome", "exit_code", "error"}` to `PATH` (temporary file and atomic
+  replace) on success, on audit gaps, when the XTKS calendar is unavailable and on every `error:` exit.
+  `outcome` is `completed`, `gaps` (audit only), `calendar_unavailable` or `failed`, so a wrapper can tell
+  these apart without reading stderr. The schema is `jqqlib.contracts.load_schema("cli_result")`. Argument
+  errors write no file; a failed write only adds a warning and keeps the exit code. Without the flag the
+  output and exit codes are unchanged.
+
 ### Changed
 
 - The fundamentals raw cache is one file. `fundamentals_raw_cache.parquet` now records the queried codes

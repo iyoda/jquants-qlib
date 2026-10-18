@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/iyoda/jquants-qlib/contracts/cli_result.v1.schema.json",
+  "title": "jqqlib run-daily / audit Command Result",
+  "type": "object",
+  "required": ["schema_version", "command", "outcome", "exit_code", "error"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "command": { "enum": ["run-daily", "audit"] },
+    "outcome": { "enum": ["completed", "gaps", "calendar_unavailable", "failed"] },
+    "exit_code": { "type": "integer" },
+    "error": { "type": ["string", "null"] }
+  }
+}

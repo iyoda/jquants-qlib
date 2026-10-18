@@ -7,8 +7,8 @@ from jqqlib.contracts import load_schema
 
 
 class ContractsPackageTests(unittest.TestCase):
-    def test_both_schemas_are_packaged_and_loadable(self) -> None:
-        for name in ("dataset_manifest", "dataset_quality_report"):
+    def test_all_schemas_are_packaged_and_loadable(self) -> None:
+        for name in ("cli_result", "dataset_manifest", "dataset_quality_report"):
             with self.subTest(name=name):
                 resource = files("jqqlib.contracts").joinpath(f"{name}.schema.json")
                 self.assertTrue(resource.is_file())

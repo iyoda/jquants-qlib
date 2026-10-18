@@ -95,7 +95,7 @@ first, then `dev` is merged into `master`.
    unittest suite must pass from an extracted sdist). The smoke drives the installed `jqqlib` console
    script (resolved next to the venv's interpreter), checks that `jqqlib --version` matches the
    installed distribution metadata, that the `py.typed` marker is packaged, that
-   `jqqlib init-config` writes the packaged example configuration, and that both packaged JSON
+   `jqqlib init-config` writes the packaged example configuration, and that all packaged JSON
    schemas load; then it converts a small synthetic CSV → Parquet → Qlib and asserts row count,
    calendar, instruments, feature files, and schema validity of the manifest and quality
    report. Run it **without** `PYTHONPATH`: the package must resolve from the
