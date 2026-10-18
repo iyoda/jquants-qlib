@@ -6,18 +6,23 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
 
 ## [Unreleased]
 
+### Changed
+
+- The fundamentals raw cache is one file. `fundamentals_raw_cache.parquet` now records the queried codes
+  (including codes with no disclosures) in its Parquet footer, written in the same atomic replace as the
+  rows, so a run killed at any point resumes with no duplicate or lost codes.
+  `fundamentals_raw_cache_attempted.json` is no longer used. The first run after upgrading converts a cache
+  written by 0.2.0 or earlier and deletes that file. Downgrading afterwards makes 0.2.0 query every code
+  again.
+
 ### Fixed
 
-- `run-fundamentals-etl` no longer duplicates a code's rows in `fundamentals_raw_cache.parquet` when
-  a run is killed after a checkpoint replaced the cache but before it recorded the attempted codes.
-  On resume, cached rows of codes missing from the attempted record are dropped, since the run
-  queries those codes again. Every checkpoint now rewrites the cache with the rows the run keeps
-  (removing it when none remain), so a code whose re-query returns empty no longer gets its old
-  rows back on the next run.
-- A cache already duplicated by an earlier version stays duplicated, because its codes are
-  recorded as attempted. If a fundamentals run was ever killed mid-checkpoint, delete
-  `fundamentals_raw_cache.parquet` and `fundamentals_raw_cache_attempted.json` once; the next run
-  fetches every code again.
+- `run-fundamentals-etl` no longer duplicates a code's rows when a run is killed between the two cache
+  writes of 0.2.0 and earlier. Converting an existing cache also collapses rows that this bug had already
+  duplicated, without querying those codes again.
+- A code listed twice in the codes passed to `fetch_fundamentals` is queried once.
+- Two consecutive runs over the same codes now return equal frames, also when a column is null for only
+  some codes.
 
 ## [0.2.0] - 2026-10-16
 
