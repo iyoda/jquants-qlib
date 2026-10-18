@@ -483,19 +483,20 @@ def _run_killed_at_replace(
 
 def _run_until_killed_at_replace(args: list[str]) -> None:
     cache_dir, replace_number, when, checkpoint_every, *codes = args
-    real_replace = os.replace
+    real_replace = Path.replace
     count = 0
 
-    def replace_then_maybe_die(src, dst, **kwargs):
+    def replace_then_maybe_die(self: Path, target: Path) -> Path:
         nonlocal count
         count += 1
         if count == int(replace_number) and when == "before":
             os.kill(os.getpid(), signal.SIGKILL)
-        real_replace(src, dst, **kwargs)
+        replaced = real_replace(self, target)
         if count == int(replace_number):
             os.kill(os.getpid(), signal.SIGKILL)
+        return replaced
 
-    os.replace = replace_then_maybe_die
+    Path.replace = replace_then_maybe_die
     fetch_fundamentals(_RecordingClient(), codes, **_cache_options(Path(cache_dir), int(checkpoint_every)))
 
 
