@@ -341,5 +341,31 @@ class FetchFundamentalsResumeCacheTests(unittest.TestCase):
             self.assertEqual(sorted(next_run["Code"]), ["10010", "10010"])
 
 
+    def test_cache_holding_only_unrecorded_rows_is_removed_when_the_re_query_returns_empty(self) -> None:
+        class Client:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def get_fin_summary(self, code: str) -> pd.DataFrame:
+                self.calls.append(code)
+                return pd.DataFrame()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / "fundamentals_raw_cache.parquet"
+            unrecorded = pd.DataFrame({"DiscDate": ["2026-06-02"], "DiscNo": ["1"], "Eq": [3.0], "Code": ["10020"]})
+            unrecorded.to_parquet(cache_path, index=False)
+            resumed_client, next_client = Client(), Client()
+
+            options = {"request_interval_sec": 0.0, "sleeper": lambda _: None, "cache_path": cache_path}
+            resumed = fetch_fundamentals(resumed_client, ["10020"], **options)
+            cache_exists_after_resume = cache_path.exists()
+            next_run = fetch_fundamentals(next_client, ["10020"], **options)
+
+            self.assertEqual(resumed_client.calls, ["10020"])
+            self.assertEqual(next_client.calls, [])
+            self.assertTrue(resumed.empty)
+            self.assertFalse(cache_exists_after_resume)
+            self.assertTrue(next_run.empty)
+
 if __name__ == "__main__":
     unittest.main()

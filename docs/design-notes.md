@@ -219,6 +219,7 @@ PIT の規則そのものは [財務](fundamentals.md#pitpoint-in-timeの意味)
   `test_codes_with_empty_response_are_not_requeried_on_resume`、
   `test_rows_cached_before_the_attempted_record_was_written_are_not_duplicated_on_resume`、
   `test_unrecorded_cached_rows_of_a_code_that_now_returns_empty_are_not_revived_by_the_next_run`、
+  `test_cache_holding_only_unrecorded_rows_is_removed_when_the_re_query_returns_empty`、
   `test_code_whose_request_raised_is_requested_again_on_resume`、`test_join_key_is_forced_to_the_requested_code`
 - `CARRY_NUM`（V2 `/fins/summary` の列）は、実データでの取得（ユニバース 500 銘柄中 483 銘柄、
   `pit_violations == 0`）で確かめてから固定した集合です。項目を増やすときは同じ確認をしてください。
