@@ -102,9 +102,11 @@ def fetch_fundamentals(
     def _checkpoint() -> None:
         if cache_path is None or attempted_path is None:
             return
-        if new_frames:
-            combined = pd.concat(cached_frames + new_frames, ignore_index=True)
-            _atomic_write_parquet(combined, cache_path)
+        frames = cached_frames + new_frames
+        if frames:
+            _atomic_write_parquet(pd.concat(frames, ignore_index=True), cache_path)
+        else:
+            cache_path.unlink(missing_ok=True)
         if newly_attempted:
             _write_attempted(attempted | newly_attempted, attempted_path)
 
