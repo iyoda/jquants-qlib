@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import json
+import os
+import signal
 import tempfile
 import unittest
 from pathlib import Path
 
 import pandas as pd
+from pandas.testing import assert_frame_equal
 
 from jqqlib.fetch_fundamentals import fetch_fundamentals
 
@@ -280,92 +284,184 @@ class FetchFundamentalsResumeCacheTests(unittest.TestCase):
             self.assertEqual(sorted(cached["Code"].unique()), ["10010"])
 
 
-    @staticmethod
-    def _cache_left_by_a_run_killed_between_cache_and_attempted_writes(cache_path: Path) -> None:
+    def test_code_requested_twice_is_queried_once(self) -> None:
+        client = _RecordingClient()
+
+        df = fetch_fundamentals(client, ["10010", "10010"], request_interval_sec=0.0, sleeper=lambda _: None)
+
+        self.assertEqual(client.calls, ["10010"])
+        self.assertEqual(list(df["Code"]), ["10010", "10010"])
+
+    def test_consecutive_runs_return_equal_frames_when_a_column_is_null_for_one_code(self) -> None:
         class Client:
             def get_fin_summary(self, code: str) -> pd.DataFrame:
-                return pd.DataFrame({"DiscDate": ["2026-05-01", "2026-06-02"], "DiscNo": ["1", "2"], "Eq": [1.0, 2.0]})
-
-        fetch_fundamentals(Client(), ["10010"], request_interval_sec=0.0, sleeper=lambda _: None, cache_path=cache_path)
-        unrecorded = pd.DataFrame({"DiscDate": ["2026-06-02"], "DiscNo": ["1"], "Eq": [3.0], "Code": ["10020"]})
-        pd.concat([pd.read_parquet(cache_path), unrecorded], ignore_index=True).to_parquet(cache_path, index=False)
-
-    def test_rows_cached_before_the_attempted_record_was_written_are_not_duplicated_on_resume(self) -> None:
-        class Client:
-            def __init__(self) -> None:
-                self.calls: list[str] = []
-
-            def get_fin_summary(self, code: str) -> pd.DataFrame:
-                self.calls.append(code)
-                return pd.DataFrame({"DiscDate": ["2026-06-02"], "DiscNo": ["1"], "Eq": [4.0]})
+                note = None if code == "10010" else "revised"
+                return pd.DataFrame({"DiscDate": ["2026-06-02"], "DiscNo": ["1"], "Note": [note]})
 
         with tempfile.TemporaryDirectory() as tmp:
-            cache_path = Path(tmp) / "fundamentals_raw_cache.parquet"
-            self._cache_left_by_a_run_killed_between_cache_and_attempted_writes(cache_path)
-            client = Client()
+            options = _cache_options(Path(tmp))
+            first = fetch_fundamentals(Client(), ["10010", "10020"], **options)
+            second = fetch_fundamentals(Client(), ["10010", "10020"], **options)
 
-            df = fetch_fundamentals(
-                client,
-                ["10010", "10020", "10030"],
-                request_interval_sec=0.0,
-                sleeper=lambda _: None,
-                cache_path=cache_path,
-            )
+        assert_frame_equal(first, second)
 
-            self.assertEqual(client.calls, ["10020", "10030"])
-            self.assertEqual(sorted(df["Code"]), ["10010", "10010", "10020", "10030"])
-            self.assertEqual(sorted(df.loc[df["Code"] == "10010", "Eq"]), [1.0, 2.0])
-            self.assertEqual(sorted(pd.read_parquet(cache_path)["Code"]), ["10010", "10010", "10020", "10030"])
 
-    def test_unrecorded_cached_rows_of_a_code_that_now_returns_empty_are_not_revived_by_the_next_run(self) -> None:
-        class Client:
-            def __init__(self) -> None:
-                self.calls: list[str] = []
-
-            def get_fin_summary(self, code: str) -> pd.DataFrame:
-                self.calls.append(code)
-                return pd.DataFrame()
-
+class FetchFundamentalsKilledRunTests(unittest.TestCase):
+    def test_run_killed_at_any_cache_write_resumes_to_the_same_single_file_cache(self) -> None:
+        codes = ["10010", "9999", "10020", "10030"]
         with tempfile.TemporaryDirectory() as tmp:
-            cache_path = Path(tmp) / "fundamentals_raw_cache.parquet"
-            self._cache_left_by_a_run_killed_between_cache_and_attempted_writes(cache_path)
-            resumed_client, next_client = Client(), Client()
+            reference = fetch_fundamentals(_RecordingClient(), codes, **_cache_options(Path(tmp) / "reference"))
 
-            options = {"request_interval_sec": 0.0, "sleeper": lambda _: None, "cache_path": cache_path}
-            resumed = fetch_fundamentals(resumed_client, ["10010", "10020"], **options)
-            next_run = fetch_fundamentals(next_client, ["10010", "10020"], **options)
+        for kill_after_replace in (False, True):
+            replace_number = 1
+            while True:
+                with self.subTest(replace_number=replace_number, kill_after_replace=kill_after_replace):
+                    with tempfile.TemporaryDirectory() as tmp:
+                        cache_dir = Path(tmp)
+                        killed = _run_killed_at_replace(codes, cache_dir, replace_number, kill_after_replace)
+                        resumed_client, next_client = _RecordingClient(), _RecordingClient()
 
-            self.assertEqual(resumed_client.calls, ["10020"])
+                        resumed = fetch_fundamentals(resumed_client, codes, **_cache_options(cache_dir))
+                        next_run = fetch_fundamentals(next_client, codes, **_cache_options(cache_dir))
+
+                        self.assertEqual(sorted(resumed["Code"]), sorted(reference["Code"]))
+                        self.assertEqual(int(resumed.duplicated(subset=["Code", "DiscNo"]).sum()), 0)
+                        self.assertEqual(next_client.calls, [])
+                        assert_frame_equal(resumed, next_run)
+                        self.assertEqual(sorted(p.name for p in cache_dir.iterdir()), [CACHE_FILENAME])
+                if not killed:
+                    break
+                replace_number += 1
+            self.assertGreater(replace_number, 1)
+
+
+class FetchFundamentalsLegacyCacheTests(unittest.TestCase):
+    def test_cache_left_by_0_2_with_duplicated_rows_is_migrated_without_requerying(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            history = _disclosures("10010")
+            _write_0_2_cache(cache_dir, pd.concat([history, history], ignore_index=True), ["10010", "9999"])
+            client, next_client = _RecordingClient(), _RecordingClient()
+
+            migrated = fetch_fundamentals(client, ["10010", "9999", "10020"], **_cache_options(cache_dir))
+            next_run = fetch_fundamentals(next_client, ["10010", "9999", "10020"], **_cache_options(cache_dir))
+
+            self.assertEqual(client.calls, ["10020"])
+            self.assertEqual(sorted(migrated["Code"]), ["10010", "10010", "10020", "10020"])
+            self.assertEqual(next_client.calls, [])
+            assert_frame_equal(migrated, next_run)
+            self.assertEqual(sorted(p.name for p in cache_dir.iterdir()), [CACHE_FILENAME])
+
+    def test_0_2_rows_of_a_code_missing_from_the_attempted_record_are_requeried_once(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            _write_0_2_cache(cache_dir, pd.concat([_disclosures("10010"), _disclosures("10020")]), ["10010"])
+            client = _RecordingClient()
+
+            df = fetch_fundamentals(client, ["10010", "10020"], **_cache_options(cache_dir))
+
+            self.assertEqual(client.calls, ["10020"])
+            self.assertEqual(sorted(df["Code"]), ["10010", "10010", "10020", "10020"])
+
+    def test_0_2_rows_of_an_unrecorded_code_that_now_returns_empty_do_not_come_back(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            _write_0_2_cache(cache_dir, pd.concat([_disclosures("10010"), _disclosures("10020")]), ["10010"])
+            client, next_client = _RecordingClient(empty={"10020"}), _RecordingClient(empty={"10020"})
+
+            resumed = fetch_fundamentals(client, ["10010", "10020"], **_cache_options(cache_dir))
+            next_run = fetch_fundamentals(next_client, ["10010", "10020"], **_cache_options(cache_dir))
+
+            self.assertEqual(client.calls, ["10020"])
             self.assertEqual(next_client.calls, [])
             self.assertEqual(sorted(resumed["Code"]), ["10010", "10010"])
-            self.assertEqual(sorted(next_run["Code"]), ["10010", "10010"])
+            assert_frame_equal(resumed, next_run)
 
-
-    def test_cache_holding_only_unrecorded_rows_is_removed_when_the_re_query_returns_empty(self) -> None:
-        class Client:
-            def __init__(self) -> None:
-                self.calls: list[str] = []
-
-            def get_fin_summary(self, code: str) -> pd.DataFrame:
-                self.calls.append(code)
-                return pd.DataFrame()
-
+    def test_0_2_attempted_record_without_a_cache_file_keeps_its_codes_attempted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            cache_path = Path(tmp) / "fundamentals_raw_cache.parquet"
-            unrecorded = pd.DataFrame({"DiscDate": ["2026-06-02"], "DiscNo": ["1"], "Eq": [3.0], "Code": ["10020"]})
-            unrecorded.to_parquet(cache_path, index=False)
-            resumed_client, next_client = Client(), Client()
+            cache_dir = Path(tmp)
+            _write_0_2_cache(cache_dir, None, ["9999"])
+            client, next_client = _RecordingClient(), _RecordingClient()
 
-            options = {"request_interval_sec": 0.0, "sleeper": lambda _: None, "cache_path": cache_path}
-            resumed = fetch_fundamentals(resumed_client, ["10020"], **options)
-            cache_exists_after_resume = cache_path.exists()
-            next_run = fetch_fundamentals(next_client, ["10020"], **options)
+            first = fetch_fundamentals(client, ["9999"], **_cache_options(cache_dir))
+            fetch_fundamentals(next_client, ["9999"], **_cache_options(cache_dir))
 
-            self.assertEqual(resumed_client.calls, ["10020"])
+            self.assertEqual(client.calls, [])
             self.assertEqual(next_client.calls, [])
-            self.assertTrue(resumed.empty)
-            self.assertFalse(cache_exists_after_resume)
-            self.assertTrue(next_run.empty)
+            self.assertTrue(first.empty)
+            self.assertEqual(sorted(p.name for p in cache_dir.iterdir()), [CACHE_FILENAME])
+
+    def test_0_2_cache_without_an_attempted_record_is_fetched_again_without_duplicates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_dir = Path(tmp)
+            _disclosures("10010").to_parquet(cache_dir / CACHE_FILENAME, index=False)
+            client = _RecordingClient()
+
+            df = fetch_fundamentals(client, ["10010"], **_cache_options(cache_dir))
+
+            self.assertEqual(client.calls, ["10010"])
+            self.assertEqual(sorted(df["Code"]), ["10010", "10010"])
+
+
+CACHE_FILENAME = "fundamentals_raw_cache.parquet"
+
+
+def _disclosures(code: str) -> pd.DataFrame:
+    return pd.DataFrame(
+        {"DiscDate": ["2026-05-01", "2026-06-02"], "DiscNo": ["1", "2"], "Eq": [1.0, 2.0], "Code": [code, code]}
+    )
+
+
+class _RecordingClient:
+    def __init__(self, empty: set[str] = frozenset()) -> None:
+        self.calls: list[str] = []
+        self._empty = empty
+
+    def get_fin_summary(self, code: str) -> pd.DataFrame:
+        self.calls.append(code)
+        if code in self._empty or code.startswith("9"):
+            return pd.DataFrame()
+        return _disclosures(code).drop(columns=["Code"])
+
+
+def _cache_options(cache_dir: Path) -> dict:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return {
+        "request_interval_sec": 0.0,
+        "sleeper": lambda _: None,
+        "cache_path": cache_dir / CACHE_FILENAME,
+        "checkpoint_every": 1,
+    }
+
+
+def _write_0_2_cache(cache_dir: Path, rows: pd.DataFrame | None, attempted: list[str]) -> None:
+    if rows is not None:
+        rows.to_parquet(cache_dir / CACHE_FILENAME, index=False)
+    (cache_dir / "fundamentals_raw_cache_attempted.json").write_text(json.dumps(sorted(attempted)), encoding="utf-8")
+
+
+def _run_killed_at_replace(codes: list[str], cache_dir: Path, replace_number: int, kill_after: bool) -> bool:
+    pid = os.fork()
+    if pid == 0:
+        real_replace = os.replace
+        count = 0
+
+        def replace_then_maybe_die(src, dst, **kwargs):
+            nonlocal count
+            count += 1
+            if count == replace_number and not kill_after:
+                os.kill(os.getpid(), signal.SIGKILL)
+            real_replace(src, dst, **kwargs)
+            if count == replace_number:
+                os.kill(os.getpid(), signal.SIGKILL)
+
+        os.replace = replace_then_maybe_die
+        try:
+            fetch_fundamentals(_RecordingClient(), codes, **_cache_options(cache_dir))
+        finally:
+            os._exit(0)
+    _, status = os.waitpid(pid, 0)
+    return os.WIFSIGNALED(status)
 
 if __name__ == "__main__":
     unittest.main()
