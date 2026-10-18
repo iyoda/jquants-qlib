@@ -2,13 +2,10 @@ from __future__ import annotations
 
 import itertools
 import json
-import os
-import signal
-import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import pandas as pd
 from pandas.testing import assert_frame_equal
@@ -461,43 +458,32 @@ def _write_0_2_cache(cache_dir: Path, rows: pd.DataFrame | None, attempted: list
     (cache_dir / "fundamentals_raw_cache_attempted.json").write_text(json.dumps(sorted(attempted)), encoding="utf-8")
 
 
-_KILLED_CHILD = (
-    "import sys; sys.path.insert(0, sys.argv[1]); "
-    "from test_fundamentals_fetch_retry import _run_until_killed_at_replace; "
-    "_run_until_killed_at_replace(sys.argv[2:])"
-)
+class _Killed(BaseException):
+    pass
 
 
 def _run_killed_at_replace(
     codes: list[str], cache_dir: Path, replace_number: int, kill_after: bool, checkpoint_every: int
 ) -> bool:
-    child = subprocess.run(
-        [sys.executable, "-c", _KILLED_CHILD, str(Path(__file__).parent), str(cache_dir), str(replace_number),
-         "after" if kill_after else "before", str(checkpoint_every), *codes],
-        check=False,
-    )
-    if child.returncode not in (0, -signal.SIGKILL):
-        raise AssertionError(f"killed run exited with {child.returncode}")
-    return child.returncode == -signal.SIGKILL
-
-
-def _run_until_killed_at_replace(args: list[str]) -> None:
-    cache_dir, replace_number, when, checkpoint_every, *codes = args
     real_replace = Path.replace
     count = 0
 
     def replace_then_maybe_die(self: Path, target: Path) -> Path:
         nonlocal count
         count += 1
-        if count == int(replace_number) and when == "before":
-            os.kill(os.getpid(), signal.SIGKILL)
+        if count == replace_number and not kill_after:
+            raise _Killed
         replaced = real_replace(self, target)
-        if count == int(replace_number):
-            os.kill(os.getpid(), signal.SIGKILL)
+        if count == replace_number:
+            raise _Killed
         return replaced
 
-    Path.replace = replace_then_maybe_die
-    fetch_fundamentals(_RecordingClient(), codes, **_cache_options(Path(cache_dir), int(checkpoint_every)))
+    with mock.patch.object(Path, "replace", replace_then_maybe_die):
+        try:
+            fetch_fundamentals(_RecordingClient(), codes, **_cache_options(cache_dir, checkpoint_every))
+        except _Killed:
+            return True
+    return False
 
 
 if __name__ == "__main__":
