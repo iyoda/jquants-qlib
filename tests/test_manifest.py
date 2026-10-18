@@ -1,26 +1,42 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 import jsonschema
 import pandas as pd
 
-from jqqlib.config import QLIB_ADJUSTMENT_NONE
+from jqqlib.config import DEFAULT_QLIB_ADJUSTMENT, QLIB_ADJUSTMENT_NONE
 from jqqlib.contracts import load_schema
 from jqqlib.manifest import (
     _build_quality_inspection,
     _producer_git_commit,
-    build_dataset_manifest,
-    build_dataset_quality_report,
     read_dataset_manifest,
     read_dataset_quality_report,
     write_dataset_artifacts,
-    write_dataset_manifest,
 )
+
+
+def _read_json(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _artifacts(
+    parquet_path: Path,
+    qlib_dir: Path,
+    *,
+    source: dict[str, Any] | None = None,
+    adjustment: str = DEFAULT_QLIB_ADJUSTMENT,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    manifest_path, quality_path = write_dataset_artifacts(
+        parquet_path=parquet_path, qlib_dir=qlib_dir, source=source or {"kind": "test"}, adjustment=adjustment
+    )
+    return _read_json(manifest_path), _read_json(quality_path)
 
 
 class ProducerGitCommitTests(unittest.TestCase):
@@ -46,7 +62,7 @@ class ProducerGitCommitTests(unittest.TestCase):
 
 
 class DatasetManifestTests(unittest.TestCase):
-    def test_build_dataset_manifest_records_dataset_and_qlib_coverage(self) -> None:
+    def test_dataset_manifest_records_dataset_and_qlib_coverage(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             parquet_path = root / "daily_quotes.parquet"
@@ -73,11 +89,7 @@ class DatasetManifestTests(unittest.TestCase):
                 encoding="utf-8",
             )
 
-            manifest = build_dataset_manifest(
-                parquet_path=parquet_path,
-                qlib_dir=qlib_dir,
-                source={"kind": "test_source"},
-            )
+            manifest, report = _artifacts(parquet_path, qlib_dir, source={"kind": "test_source"})
 
             self.assertEqual(manifest["schema_version"], 2)
             self.assertTrue(manifest["dataset_id"].startswith("jqqlib-v2-"))
@@ -101,9 +113,6 @@ class DatasetManifestTests(unittest.TestCase):
             self.assertEqual(manifest["source"]["kind"], "test_source")
             jsonschema.validate(manifest, load_schema("dataset_manifest"))
 
-            report = build_dataset_quality_report(
-                parquet_path=parquet_path, qlib_dir=qlib_dir, manifest=manifest
-            )
             self.assertEqual(report["dataset_id"], manifest["dataset_id"])
             jsonschema.validate(report, load_schema("dataset_quality_report"))
 
@@ -129,11 +138,8 @@ class DatasetManifestTests(unittest.TestCase):
             (qlib_dir / "calendars" / "day.txt").write_text("2024-01-04\n", encoding="utf-8")
             (qlib_dir / "instruments").mkdir()
             (qlib_dir / "instruments" / "all.txt").write_text("10010\t2024-01-04\t2024-01-04\n", encoding="utf-8")
-            manifest = build_dataset_manifest(
-                parquet_path=parquet_path,
-                qlib_dir=qlib_dir,
-                source={"kind": "test_source"},
-                adjustment=QLIB_ADJUSTMENT_NONE,
+            manifest, _ = _artifacts(
+                parquet_path, qlib_dir, source={"kind": "test_source"}, adjustment=QLIB_ADJUSTMENT_NONE
             )
             self.assertEqual(manifest["field_schema"]["open"]["adjustment"], "none")
             self.assertNotIn("factor", manifest["field_schema"])
@@ -168,7 +174,7 @@ class DatasetManifestTests(unittest.TestCase):
                 }
             ).to_parquet(parquet_path, index=False)
 
-            manifest_path = write_dataset_manifest(
+            manifest_path, _ = write_dataset_artifacts(
                 parquet_path=parquet_path,
                 qlib_dir=qlib_dir,
                 source={"kind": "test_source"},
@@ -178,8 +184,10 @@ class DatasetManifestTests(unittest.TestCase):
             self.assertEqual(manifest_path, qlib_dir / "dataset_manifest.json")
             self.assertIsNotNone(loaded)
             self.assertEqual(loaded["provider_uri"], str(qlib_dir))
+            self.assertIsNone(read_dataset_manifest(root / "missing"))
+            self.assertIsNone(read_dataset_quality_report(root / "missing"))
 
-    def test_build_dataset_quality_report_records_validation_summary(self) -> None:
+    def test_quality_report_records_validation_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             parquet_path = root / "daily_quotes.parquet"
@@ -198,7 +206,7 @@ class DatasetManifestTests(unittest.TestCase):
                 }
             ).to_parquet(parquet_path, index=False)
 
-            report = build_dataset_quality_report(parquet_path=parquet_path, qlib_dir=qlib_dir)
+            _, report = _artifacts(parquet_path, qlib_dir)
 
             self.assertEqual(report["schema_version"], 2)
             self.assertEqual(report["status"], "fail")
@@ -231,7 +239,7 @@ class DatasetManifestTests(unittest.TestCase):
             (qlib_dir / "instruments").mkdir()
             (qlib_dir / "instruments" / "all.txt").write_text("10010\t2024-01-04\t2024-01-05\n", encoding="utf-8")
 
-            report = build_dataset_quality_report(parquet_path=parquet_path, qlib_dir=qlib_dir)
+            _, report = _artifacts(parquet_path, qlib_dir)
 
             self.assertEqual(report["status"], "warning")
             self.assertEqual(report["validation_errors"], [])
@@ -268,7 +276,7 @@ class DatasetManifestTests(unittest.TestCase):
             (qlib_dir / "instruments").mkdir()
             (qlib_dir / "instruments" / "all.txt").write_text("10010\t2024-01-04\t2024-01-04\n", encoding="utf-8")
 
-            report = build_dataset_quality_report(parquet_path=parquet_path, qlib_dir=qlib_dir)
+            _, report = _artifacts(parquet_path, qlib_dir)
 
             self.assertEqual(report["status"], "fail")
             self.assertIn("Rows with partial OHLCV null fields: 1", report["validation_errors"])
@@ -298,7 +306,7 @@ class DatasetManifestTests(unittest.TestCase):
             (qlib_dir / "instruments").mkdir()
             (qlib_dir / "instruments" / "all.txt").write_text("10010\t2024-01-04\t2024-01-05\n", encoding="utf-8")
 
-            report = build_dataset_quality_report(parquet_path=parquet_path, qlib_dir=qlib_dir)
+            _, report = _artifacts(parquet_path, qlib_dir)
 
             self.assertEqual(report["status"], "fail")
             dumped_factor = next(finding for finding in report["findings"] if finding["check"] == "dumped_factor")
@@ -336,16 +344,14 @@ class DatasetManifestTests(unittest.TestCase):
             with self.subTest(label), tempfile.TemporaryDirectory() as tmpdir:
                 parquet_path, qlib_dir = self._seed_vendor_dataset(Path(tmpdir), adjustment_factor=factor)
 
-                report = build_dataset_quality_report(parquet_path=parquet_path, qlib_dir=qlib_dir)
+                _, report = _artifacts(parquet_path, qlib_dir)
 
                 self.assertEqual(report["status"], "fail")
                 finding = next(item for item in report["findings"] if item["check"] == "dumped_factor")
                 self.assertTrue(finding["detail"].startswith("Dumped factor cannot be computed: "), finding)
                 jsonschema.validate(report, load_schema("dataset_quality_report"))
 
-                none_report = build_dataset_quality_report(
-                    parquet_path=parquet_path, qlib_dir=qlib_dir, adjustment=QLIB_ADJUSTMENT_NONE
-                )
+                _, none_report = _artifacts(parquet_path, qlib_dir, adjustment=QLIB_ADJUSTMENT_NONE)
                 self.assertEqual(none_report["status"], "pass")
 
     def test_quality_report_accepts_a_nullable_integer_factor_read_back_from_parquet(self) -> None:
@@ -357,7 +363,7 @@ class DatasetManifestTests(unittest.TestCase):
             )
             self.assertEqual(str(pd.read_parquet(parquet_path)["adjustment_factor"].dtype), "Int64")
 
-            report = build_dataset_quality_report(parquet_path=parquet_path, qlib_dir=qlib_dir)
+            _, report = _artifacts(parquet_path, qlib_dir)
 
         self.assertEqual(report["status"], "pass")
         self.assertEqual(report["checks"]["dumped_factor_invalid_rows"], 0)
@@ -366,9 +372,9 @@ class DatasetManifestTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             parquet_path, qlib_dir = self._seed_vendor_dataset(Path(tmpdir), adjustment_factor=[1.0, 1.0])
             ids = {
-                adjustment: build_dataset_manifest(
-                    parquet_path=parquet_path, qlib_dir=qlib_dir, source={"kind": "test"}, adjustment=adjustment
-                )["dataset_id"]
+                adjustment: _artifacts(
+                    parquet_path, qlib_dir, source={"kind": "test"}, adjustment=adjustment
+                )[0]["dataset_id"]
                 for adjustment in ("vendor_factor", QLIB_ADJUSTMENT_NONE)
             }
 
@@ -398,11 +404,13 @@ class DatasetManifestTests(unittest.TestCase):
             with patch(
                 "jqqlib.manifest._build_quality_inspection", wraps=_build_quality_inspection
             ) as inspection:
-                write_dataset_artifacts(parquet_path=parquet_path, qlib_dir=qlib_dir, source={"kind": "test"})
+                manifest_path, quality_path = write_dataset_artifacts(
+                    parquet_path=parquet_path, qlib_dir=qlib_dir, source={"kind": "test"}
+                )
 
             self.assertEqual(inspection.call_count, 1)
-            manifest = read_dataset_manifest(qlib_dir)
-            report = read_dataset_quality_report(qlib_dir)
+            manifest = _read_json(manifest_path)
+            report = _read_json(quality_path)
         self.assertEqual(report["dataset_id"], manifest["dataset_id"])
         self.assertEqual(report["status"], manifest["quality_status"])
         jsonschema.validate(manifest, load_schema("dataset_manifest"))
