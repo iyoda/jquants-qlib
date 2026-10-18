@@ -26,6 +26,9 @@ from jqqlib.ledger import (
     read_ledger,
 )
 from jqqlib.pipeline import evaluate_publish_check, main
+from tests.git_isolation import scrub_inherited_git_environment
+
+scrub_inherited_git_environment()
 
 POLICY = {"mode": "vendor_factor", "price_fields": ["open", "close"]}
 

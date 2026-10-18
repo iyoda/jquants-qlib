@@ -20,6 +20,9 @@ from jqqlib.manifest import (
     read_dataset_quality_report,
     write_dataset_artifacts,
 )
+from tests.git_isolation import scrub_inherited_git_environment
+
+scrub_inherited_git_environment()
 
 
 def _read_json(path: Path) -> dict[str, Any]:
