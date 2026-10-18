@@ -1,0 +1,779 @@
+{
+  "bootstrap-csv, qlib.adjustment vendor_factor": {
+    "dataset_manifest.json": {
+      "adjustment_policy": {
+        "amount_adjustment": "none",
+        "amount_fields": [
+          "amount"
+        ],
+        "known_limitations": [
+          "Dividends are not adjusted.",
+          "Rights issues (ex_rights_type 3) adjust prices but not volume."
+        ],
+        "price_adjustment": "vendor_cumulative_factor",
+        "price_fields": [
+          "open",
+          "high",
+          "low",
+          "close"
+        ],
+        "producer_transform": "dump_time_cumulative_vendor_factor",
+        "schema_version": 1,
+        "source": "J-Quants AdjFactor",
+        "volume_adjustment": "vendor_cumulative_factor_excluding_rights_issue",
+        "volume_fields": [
+          "volume"
+        ]
+      },
+      "build_id": "20260608T090000Z-<dataset_id hash, derived from the Parquet sha256>",
+      "dataset": {
+        "date_end": "2026-06-05",
+        "date_start": "2026-06-01",
+        "fields": [
+          "open",
+          "high",
+          "low",
+          "close",
+          "volume",
+          "amount",
+          "factor"
+        ],
+        "instruments": 2,
+        "rows": 10
+      },
+      "dataset_id": "jqqlib-v2-<dataset_id hash, derived from the Parquet sha256>",
+      "field_schema": {
+        "amount": {
+          "adjustment": "none",
+          "dtype": "float32",
+          "nullable": true,
+          "qlib_expression": "$amount",
+          "role": "turnover",
+          "source_column": "TurnoverValue"
+        },
+        "close": {
+          "adjustment": "split_reverse_split_rights_issue",
+          "dtype": "float32",
+          "nullable": true,
+          "qlib_expression": "$close",
+          "role": "price",
+          "source_column": "Close"
+        },
+        "date": {
+          "dtype": "date",
+          "nullable": false,
+          "role": "calendar_date",
+          "source_column": "Date"
+        },
+        "factor": {
+          "adjustment": "cumulative_vendor_factor",
+          "dtype": "float32",
+          "nullable": false,
+          "qlib_expression": "$factor",
+          "role": "adjustment_factor",
+          "source_column": "adjustment_factor"
+        },
+        "high": {
+          "adjustment": "split_reverse_split_rights_issue",
+          "dtype": "float32",
+          "nullable": true,
+          "qlib_expression": "$high",
+          "role": "price",
+          "source_column": "High"
+        },
+        "low": {
+          "adjustment": "split_reverse_split_rights_issue",
+          "dtype": "float32",
+          "nullable": true,
+          "qlib_expression": "$low",
+          "role": "price",
+          "source_column": "Low"
+        },
+        "open": {
+          "adjustment": "split_reverse_split_rights_issue",
+          "dtype": "float32",
+          "nullable": true,
+          "qlib_expression": "$open",
+          "role": "price",
+          "source_column": "Open"
+        },
+        "symbol": {
+          "dtype": "string",
+          "nullable": false,
+          "role": "instrument",
+          "source_column": "Code"
+        },
+        "volume": {
+          "adjustment": "split_reverse_split",
+          "dtype": "float32",
+          "nullable": true,
+          "qlib_expression": "$volume",
+          "role": "volume",
+          "source_column": "Volume"
+        }
+      },
+      "generated_at": "2026-06-08T09:00:00Z",
+      "lineage": {
+        "manifest_sha256": "<sha256 of the manifest without manifest_sha256, which carries the Parquet sha256>",
+        "manifest_sha256_scope": "payload_without_manifest_sha256",
+        "parquet_sha256": "<sha256 of daily_quotes.parquet, whose bytes embed the pandas and pyarrow versions>",
+        "producer_git_commit": "0123456789abcdef0123456789abcdef01234567",
+        "quality_report_sha256": "<sha256 of dataset_quality_report.json, which carries the dataset_id>"
+      },
+      "parquet_path": "<tmp>/parquet/daily_quotes.parquet",
+      "provider_uri": "<tmp>/qlib",
+      "qlib": {
+        "calendar_days": 5,
+        "calendar_end": "2026-06-05",
+        "calendar_path": "<tmp>/qlib/calendars/day.txt",
+        "calendar_start": "2026-06-01",
+        "instrument_count": 2
+      },
+      "quality_status": "pass",
+      "schema_version": 2,
+      "source": {
+        "csv_path": "<tmp>/daily_quotes.csv",
+        "kind": "csv"
+      }
+    },
+    "dataset_quality_report.json": {
+      "checks": {
+        "amount_null_rows": 0,
+        "amount_null_with_complete_ohlcv_rows": 0,
+        "calendar_days": 5,
+        "dumped_factor_invalid_rows": 0,
+        "dumped_factor_latest_not_one_symbols": 0,
+        "duplicate_symbol_date_rows": 0,
+        "empty_symbol_rows": 0,
+        "instrument_count": 2,
+        "invalid_date_rows": 0,
+        "invalid_price_order_rows": 0,
+        "negative_amount_rows": 0,
+        "negative_volume_rows": 0,
+        "non_numeric_counts": {
+          "amount": 0,
+          "close": 0,
+          "high": 0,
+          "low": 0,
+          "open": 0,
+          "volume": 0
+        },
+        "null_counts": {
+          "amount": 0,
+          "close": 0,
+          "high": 0,
+          "low": 0,
+          "open": 0,
+          "volume": 0
+        },
+        "ohlcv_null_classification": {
+          "affected_symbol_count": 0,
+          "all_ohlcv_null_rows": 0,
+          "date_concentration": [],
+          "field_null_counts": {
+            "close": 0,
+            "high": 0,
+            "low": 0,
+            "open": 0,
+            "volume": 0
+          },
+          "partial_ohlcv_null_rows": 0,
+          "row_ratio": 0.0,
+          "rows_with_any_ohlcv_null": 0
+        },
+        "rows": 10,
+        "rows_by_date_max": 2,
+        "rows_by_date_min": 2
+      },
+      "dataset_id": "jqqlib-v2-<dataset_id hash, derived from the Parquet sha256>",
+      "dataset_manifest_ref": "<tmp>/qlib/dataset_manifest.json",
+      "findings": [],
+      "generated_at": "2026-06-08T09:00:00Z",
+      "highest_severity": "pass",
+      "parquet_path": "<tmp>/parquet/daily_quotes.parquet",
+      "provider_uri": "<tmp>/qlib",
+      "schema_version": 2,
+      "severity_counts": {
+        "fail": 0,
+        "info": 0,
+        "warning": 0
+      },
+      "status": "pass",
+      "validation_errors": []
+    },
+    "parquet": {
+      "columns": [
+        "symbol",
+        "date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "amount",
+        "adjustment_factor",
+        "ex_rights_type"
+      ],
+      "rows": [
+        [
+          "10010",
+          "2026-06-01",
+          1012,
+          1018,
+          1007,
+          1013,
+          1500,
+          1519500,
+          1.0,
+          null
+        ],
+        [
+          "10010",
+          "2026-06-02",
+          1008,
+          1016,
+          1003,
+          1011,
+          7200,
+          7279200,
+          1.0,
+          null
+        ],
+        [
+          "10010",
+          "2026-06-03",
+          1012,
+          1017,
+          1006,
+          1011,
+          7100,
+          7178100,
+          0.5,
+          null
+        ],
+        [
+          "10010",
+          "2026-06-04",
+          1011,
+          1020,
+          1006,
+          1015,
+          3700,
+          3755500,
+          1.0,
+          null
+        ],
+        [
+          "10010",
+          "2026-06-05",
+          1016,
+          1021,
+          1008,
+          1013,
+          4600,
+          4659800,
+          1.0,
+          null
+        ],
+        [
+          "10020",
+          "2026-06-01",
+          1104,
+          1109,
+          1095,
+          1100,
+          8900,
+          9790000,
+          1.0,
+          null
+        ],
+        [
+          "10020",
+          "2026-06-02",
+          1108,
+          1116,
+          1103,
+          1111,
+          8700,
+          9665700,
+          1.0,
+          null
+        ],
+        [
+          "10020",
+          "2026-06-03",
+          1104,
+          1109,
+          1098,
+          1103,
+          2200,
+          2426600,
+          1.0,
+          null
+        ],
+        [
+          "10020",
+          "2026-06-04",
+          1102,
+          1112,
+          1097,
+          1107,
+          5200,
+          5756400,
+          0.8,
+          "3"
+        ],
+        [
+          "10020",
+          "2026-06-05",
+          1115,
+          1123,
+          1110,
+          1118,
+          2200,
+          2459600,
+          1.0,
+          null
+        ]
+      ]
+    },
+    "qlib files sha256": {
+      "calendars/day.txt": "d08e15c0fe68ba32c247f6323e187c75a5035123deba99dd99cde5370cfa55f5",
+      "features/10010/amount.day.bin": "75e056f25b20ce081b1485bad7e2a106797ee699f0f12a54ba1705c990b30bc3",
+      "features/10010/close.day.bin": "26a36b59f0f86dbb32800bbb5b946fb84bb49f5ba4b6a4e140c6a08519c17a22",
+      "features/10010/factor.day.bin": "8c3d6a37498db37b5cb26a06219460bf9007bdb507e62a40fdc9bc1aedfd54c0",
+      "features/10010/high.day.bin": "3139d6ba697c367146a618ffd72b7787d5b4656c2c30df7d7396a418015c1fdb",
+      "features/10010/low.day.bin": "d82e09c89553d3b8b870693630dc1c371f2ba68523cb0c7b7946d825f4018b63",
+      "features/10010/open.day.bin": "4eb87adf142c2c0fca9d4036cfb6bfc349ba8e6a5dcfb9b69ad2a2b5d315630a",
+      "features/10010/volume.day.bin": "06f0ffd8ca914343be1b7d6f12793c527be625684f0396caa1d48c0cb350aaf5",
+      "features/10020/amount.day.bin": "8098b9b04a64efc66345efd06d39bbf48ff718a3577d305247d594302f6604a2",
+      "features/10020/close.day.bin": "31b25db6821f5a2602547e851d06fddf9cc2596c86405090ba59a35956ebbd98",
+      "features/10020/factor.day.bin": "ad124fd2c3fc6712ca60f0778861cd6ef3ea7c961cd0765414280294bf8634ac",
+      "features/10020/high.day.bin": "9975435ff5a0b24058e0312ff97796c69566bc5fe632a2027f302fdadb39d3c5",
+      "features/10020/low.day.bin": "9f8dad303bcd839e1bc9e4018d6af35c0e258177e66d400ea7a2a26ff584fce2",
+      "features/10020/open.day.bin": "e981ba84225eed778288e851470a265fc42273e1f2f638ae0f8ac1c613ca036c",
+      "features/10020/volume.day.bin": "f94689f8416f16eecd1ea8019ae213936ed73379f3592ed4abf4408c02f5a053",
+      "instruments/all.txt": "582266f3802acb6a5f4f079839e27134a9baf03b6d78358b4d8f9ad766a4f8d9"
+    },
+    "stdout": [
+      "Bootstrap completed. Qlib dataset created: <tmp>/qlib",
+      "Dataset manifest created: <tmp>/qlib/dataset_manifest.json",
+      "Dataset quality report created: <tmp>/qlib/dataset_quality_report.json"
+    ]
+  },
+  "convert, qlib.adjustment none": {
+    "dataset_manifest.json": {
+      "adjustment_policy": {
+        "amount_adjustment": "none",
+        "amount_fields": [
+          "amount"
+        ],
+        "known_limitations": [
+          "qlib.adjustment is none: OHLC/volume are raw; no $factor series is emitted."
+        ],
+        "price_adjustment": "none",
+        "price_fields": [
+          "open",
+          "high",
+          "low",
+          "close"
+        ],
+        "producer_transform": "column_normalization_only",
+        "schema_version": 1,
+        "volume_adjustment": "none",
+        "volume_fields": [
+          "volume"
+        ]
+      },
+      "build_id": "20260608T090000Z-<dataset_id hash, derived from the Parquet sha256>",
+      "dataset": {
+        "date_end": "2026-06-05",
+        "date_start": "2026-06-01",
+        "fields": [
+          "open",
+          "high",
+          "low",
+          "close",
+          "volume",
+          "amount"
+        ],
+        "instruments": 2,
+        "rows": 9
+      },
+      "dataset_id": "jqqlib-v2-<dataset_id hash, derived from the Parquet sha256>",
+      "field_schema": {
+        "amount": {
+          "adjustment": "none",
+          "dtype": "float32",
+          "nullable": true,
+          "qlib_expression": "$amount",
+          "role": "turnover",
+          "source_column": "TurnoverValue"
+        },
+        "close": {
+          "adjustment": "none",
+          "dtype": "float32",
+          "nullable": true,
+          "qlib_expression": "$close",
+          "role": "price",
+          "source_column": "Close"
+        },
+        "date": {
+          "dtype": "date",
+          "nullable": false,
+          "role": "calendar_date",
+          "source_column": "Date"
+        },
+        "high": {
+          "adjustment": "none",
+          "dtype": "float32",
+          "nullable": true,
+          "qlib_expression": "$high",
+          "role": "price",
+          "source_column": "High"
+        },
+        "low": {
+          "adjustment": "none",
+          "dtype": "float32",
+          "nullable": true,
+          "qlib_expression": "$low",
+          "role": "price",
+          "source_column": "Low"
+        },
+        "open": {
+          "adjustment": "none",
+          "dtype": "float32",
+          "nullable": true,
+          "qlib_expression": "$open",
+          "role": "price",
+          "source_column": "Open"
+        },
+        "symbol": {
+          "dtype": "string",
+          "nullable": false,
+          "role": "instrument",
+          "source_column": "Code"
+        },
+        "volume": {
+          "adjustment": "none",
+          "dtype": "float32",
+          "nullable": true,
+          "qlib_expression": "$volume",
+          "role": "volume",
+          "source_column": "Volume"
+        }
+      },
+      "generated_at": "2026-06-08T09:00:00Z",
+      "lineage": {
+        "manifest_sha256": "<sha256 of the manifest without manifest_sha256, which carries the Parquet sha256>",
+        "manifest_sha256_scope": "payload_without_manifest_sha256",
+        "parquet_sha256": "<sha256 of daily_quotes.parquet, whose bytes embed the pandas and pyarrow versions>",
+        "producer_git_commit": "0123456789abcdef0123456789abcdef01234567",
+        "quality_report_sha256": "<sha256 of dataset_quality_report.json, which carries the dataset_id>"
+      },
+      "parquet_path": "<tmp>/parquet/daily_quotes.parquet",
+      "provider_uri": "<tmp>/qlib",
+      "qlib": {
+        "calendar_days": 5,
+        "calendar_end": "2026-06-05",
+        "calendar_path": "<tmp>/qlib/calendars/day.txt",
+        "calendar_start": "2026-06-01",
+        "instrument_count": 2
+      },
+      "quality_status": "fail",
+      "schema_version": 2,
+      "source": {
+        "kind": "parquet",
+        "parquet_path": "<tmp>/parquet/daily_quotes.parquet"
+      }
+    },
+    "dataset_quality_report.json": {
+      "checks": {
+        "amount_null_rows": 2,
+        "amount_null_with_complete_ohlcv_rows": 1,
+        "calendar_days": 5,
+        "dumped_factor_invalid_rows": null,
+        "dumped_factor_latest_not_one_symbols": null,
+        "duplicate_symbol_date_rows": 1,
+        "empty_symbol_rows": 0,
+        "instrument_count": 2,
+        "invalid_date_rows": 0,
+        "invalid_price_order_rows": 1,
+        "negative_amount_rows": 2,
+        "negative_volume_rows": 1,
+        "non_numeric_counts": {
+          "amount": 0,
+          "close": 0,
+          "high": 0,
+          "low": 0,
+          "open": 0,
+          "volume": 0
+        },
+        "null_counts": {
+          "amount": 2,
+          "close": 1,
+          "high": 1,
+          "low": 1,
+          "open": 2,
+          "volume": 1
+        },
+        "ohlcv_null_classification": {
+          "affected_symbol_count": 1,
+          "all_ohlcv_null_rows": 1,
+          "date_concentration": [
+            {
+              "date": "2026-06-02",
+              "rows": 1
+            }
+          ],
+          "field_null_counts": {
+            "close": 1,
+            "high": 1,
+            "low": 1,
+            "open": 2,
+            "volume": 1
+          },
+          "partial_ohlcv_null_rows": 1,
+          "row_ratio": 0.1111111111111111,
+          "rows_with_any_ohlcv_null": 2
+        },
+        "rows": 9,
+        "rows_by_date_max": 3,
+        "rows_by_date_min": 1
+      },
+      "dataset_id": "jqqlib-v2-<dataset_id hash, derived from the Parquet sha256>",
+      "dataset_manifest_ref": "<tmp>/qlib/dataset_manifest.json",
+      "findings": [
+        {
+          "check": "duplicate_symbol_date_rows",
+          "count": 1,
+          "detail": "Duplicate (symbol, date) rows: 1",
+          "severity": "fail"
+        },
+        {
+          "affected_symbol_count": 1,
+          "check": "ohlcv_all_null_rows",
+          "count": 1,
+          "date_concentration": [
+            {
+              "date": "2026-06-02",
+              "rows": 1
+            }
+          ],
+          "detail": "Rows with all OHLCV fields null: 1",
+          "fields": [
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume"
+          ],
+          "interpretation": "missing_bar_or_source_gap",
+          "row_ratio": 0.1111111111111111,
+          "severity": "warning"
+        },
+        {
+          "check": "ohlcv_partial_null_rows",
+          "count": 1,
+          "detail": "Rows with partial OHLCV null fields: 1",
+          "fields": [
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume"
+          ],
+          "interpretation": "incomplete_bar",
+          "severity": "fail"
+        },
+        {
+          "check": "amount_null_with_complete_ohlcv_rows",
+          "count": 1,
+          "detail": "Rows with null amount but complete OHLCV: 1",
+          "field": "amount",
+          "interpretation": "turnover_missing",
+          "severity": "warning"
+        },
+        {
+          "check": "invalid_price_order_rows",
+          "count": 1,
+          "detail": "Rows violating low <= open/close <= high: 1",
+          "fields": [
+            "open",
+            "high",
+            "low",
+            "close"
+          ],
+          "severity": "fail"
+        },
+        {
+          "check": "negative_volume_rows",
+          "count": 1,
+          "detail": "Negative volume rows: 1",
+          "field": "volume",
+          "severity": "fail"
+        },
+        {
+          "check": "negative_amount_rows",
+          "count": 2,
+          "detail": "Negative amount rows: 2",
+          "field": "amount",
+          "severity": "fail"
+        }
+      ],
+      "generated_at": "2026-06-08T09:00:00Z",
+      "highest_severity": "fail",
+      "parquet_path": "<tmp>/parquet/daily_quotes.parquet",
+      "provider_uri": "<tmp>/qlib",
+      "schema_version": 2,
+      "severity_counts": {
+        "fail": 5,
+        "info": 0,
+        "warning": 2
+      },
+      "status": "fail",
+      "validation_errors": [
+        "Duplicate (symbol, date) rows: 1",
+        "Rows with partial OHLCV null fields: 1",
+        "Rows violating low <= open/close <= high: 1",
+        "Negative volume rows: 1",
+        "Negative amount rows: 2"
+      ]
+    },
+    "parquet": {
+      "columns": [
+        "symbol",
+        "date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "amount",
+        "adjustment_factor"
+      ],
+      "rows": [
+        [
+          "10010",
+          "2026-06-01",
+          100.5,
+          104.0,
+          99.0,
+          103.25,
+          1200.0,
+          123900.0,
+          1.0
+        ],
+        [
+          "10010",
+          "2026-06-02",
+          null,
+          null,
+          null,
+          null,
+          null,
+          null,
+          1.0
+        ],
+        [
+          "10010",
+          "2026-06-03",
+          null,
+          105.0,
+          101.0,
+          104.0,
+          800.0,
+          83200.0,
+          1.0
+        ],
+        [
+          "10010",
+          "2026-06-04",
+          102.0,
+          98.0,
+          101.0,
+          99.5,
+          900.0,
+          89550.0,
+          0.5
+        ],
+        [
+          "10010",
+          "2026-06-05",
+          99.0,
+          100.0,
+          97.0,
+          98.0,
+          -50.0,
+          4900.0,
+          1.0
+        ],
+        [
+          "10020",
+          "2026-06-01",
+          200.0,
+          210.0,
+          195.0,
+          205.0,
+          500.0,
+          102500.0,
+          1.0
+        ],
+        [
+          "10020",
+          "2026-06-02",
+          205.0,
+          206.0,
+          200.0,
+          201.0,
+          400.0,
+          null,
+          1.0
+        ],
+        [
+          "10020",
+          "2026-06-04",
+          201.0,
+          202.0,
+          199.0,
+          200.0,
+          300.0,
+          -60000.0,
+          1.0
+        ],
+        [
+          "10020",
+          "2026-06-04",
+          201.0,
+          202.0,
+          199.0,
+          200.0,
+          300.0,
+          -60000.0,
+          1.0
+        ]
+      ]
+    },
+    "qlib files sha256": {
+      "calendars/day.txt": "d08e15c0fe68ba32c247f6323e187c75a5035123deba99dd99cde5370cfa55f5",
+      "features/10010/amount.day.bin": "ed723a653087bd0d16ddfc29f088f7841018339b6da8a5d182441aec670958f9",
+      "features/10010/close.day.bin": "babf0193deab7d5fb0c843beaf2d18838b05f5ab72ec50340f29ac6317508fc3",
+      "features/10010/high.day.bin": "7648bf5a7e975a0daf09e7bb031bba35913259957a07f2d402b815bd01db5e5f",
+      "features/10010/low.day.bin": "5a2ed9407557de33c175f083dcc09095274e2a595aea1793c600471878be8bbd",
+      "features/10010/open.day.bin": "365c0e5fbd054e84eb3fbe5139d9e019321ebc2886324889becf9e9d8c10d1c1",
+      "features/10010/volume.day.bin": "8d15663386946a573e7910e3653ec58b019461860f6a525094d076999f957101",
+      "features/10020/amount.day.bin": "a2e2f860b0358f80bb7e7e1993342ef33dd2e13f930c5dc70c9bd60a353d498d",
+      "features/10020/close.day.bin": "a30905c4822607c86314fa0fb82659a73c30027f19137ad4448c633a8dd8a638",
+      "features/10020/high.day.bin": "50ed2e0bc78c983bc9cc3a794c6ed8430d3527184bac190b67099a2a4ab37b6d",
+      "features/10020/low.day.bin": "e0aeb7084f8a2970f3a5ebeecc09946ad495dc8e9194a66496a31e680a7c417d",
+      "features/10020/open.day.bin": "5a6f1f75652aeb04c430d4c5041bb19602eedc69b065ae40a06f3a46f0d1c103",
+      "features/10020/volume.day.bin": "fb0a5afa1dbf951e7f442d5b9ce039e3f78bde99c3b9111ed2681b93bae01792",
+      "instruments/all.txt": "53811a51e7923eb12db8b0be237a3d2043625d167abda00ed80e76baa52db5e3"
+    },
+    "stdout": [
+      "Qlib dataset created: <tmp>/qlib",
+      "Dataset manifest created: <tmp>/qlib/dataset_manifest.json",
+      "Dataset quality report created: <tmp>/qlib/dataset_quality_report.json"
+    ]
+  }
+}
