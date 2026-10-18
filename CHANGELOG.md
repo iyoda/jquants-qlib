@@ -12,8 +12,9 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
   (including codes with no disclosures) in its Parquet footer, written in the same atomic replace as the
   rows, so a run killed at any point resumes with no duplicate or lost codes.
   `fundamentals_raw_cache_attempted.json` is no longer used. The first run after upgrading converts a cache
-  written by 0.2.0 or earlier and deletes that file. Downgrading afterwards makes 0.2.0 query every code
-  again.
+  written by 0.2.0 or earlier and deletes that file. Before downgrading to 0.2.0, delete
+  `fundamentals_raw_cache.parquet`: 0.2.0 ignores the footer, queries every code again and appends the
+  responses to the rows already in the file, which leaves every code's rows duplicated.
 
 ### Fixed
 
