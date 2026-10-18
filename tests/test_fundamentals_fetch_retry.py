@@ -280,5 +280,92 @@ class FetchFundamentalsResumeCacheTests(unittest.TestCase):
             self.assertEqual(sorted(cached["Code"].unique()), ["10010"])
 
 
+    @staticmethod
+    def _cache_left_by_a_run_killed_between_cache_and_attempted_writes(cache_path: Path) -> None:
+        class Client:
+            def get_fin_summary(self, code: str) -> pd.DataFrame:
+                return pd.DataFrame({"DiscDate": ["2026-05-01", "2026-06-02"], "DiscNo": ["1", "2"], "Eq": [1.0, 2.0]})
+
+        fetch_fundamentals(Client(), ["10010"], request_interval_sec=0.0, sleeper=lambda _: None, cache_path=cache_path)
+        unrecorded = pd.DataFrame({"DiscDate": ["2026-06-02"], "DiscNo": ["1"], "Eq": [3.0], "Code": ["10020"]})
+        pd.concat([pd.read_parquet(cache_path), unrecorded], ignore_index=True).to_parquet(cache_path, index=False)
+
+    def test_rows_cached_before_the_attempted_record_was_written_are_not_duplicated_on_resume(self) -> None:
+        class Client:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def get_fin_summary(self, code: str) -> pd.DataFrame:
+                self.calls.append(code)
+                return pd.DataFrame({"DiscDate": ["2026-06-02"], "DiscNo": ["1"], "Eq": [4.0]})
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / "fundamentals_raw_cache.parquet"
+            self._cache_left_by_a_run_killed_between_cache_and_attempted_writes(cache_path)
+            client = Client()
+
+            df = fetch_fundamentals(
+                client,
+                ["10010", "10020", "10030"],
+                request_interval_sec=0.0,
+                sleeper=lambda _: None,
+                cache_path=cache_path,
+            )
+
+            self.assertEqual(client.calls, ["10020", "10030"])
+            self.assertEqual(sorted(df["Code"]), ["10010", "10010", "10020", "10030"])
+            self.assertEqual(sorted(df.loc[df["Code"] == "10010", "Eq"]), [1.0, 2.0])
+            self.assertEqual(sorted(pd.read_parquet(cache_path)["Code"]), ["10010", "10010", "10020", "10030"])
+
+    def test_unrecorded_cached_rows_of_a_code_that_now_returns_empty_are_not_revived_by_the_next_run(self) -> None:
+        class Client:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def get_fin_summary(self, code: str) -> pd.DataFrame:
+                self.calls.append(code)
+                return pd.DataFrame()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / "fundamentals_raw_cache.parquet"
+            self._cache_left_by_a_run_killed_between_cache_and_attempted_writes(cache_path)
+            resumed_client, next_client = Client(), Client()
+
+            options = {"request_interval_sec": 0.0, "sleeper": lambda _: None, "cache_path": cache_path}
+            resumed = fetch_fundamentals(resumed_client, ["10010", "10020"], **options)
+            next_run = fetch_fundamentals(next_client, ["10010", "10020"], **options)
+
+            self.assertEqual(resumed_client.calls, ["10020"])
+            self.assertEqual(next_client.calls, [])
+            self.assertEqual(sorted(resumed["Code"]), ["10010", "10010"])
+            self.assertEqual(sorted(next_run["Code"]), ["10010", "10010"])
+
+
+    def test_cache_holding_only_unrecorded_rows_is_removed_when_the_re_query_returns_empty(self) -> None:
+        class Client:
+            def __init__(self) -> None:
+                self.calls: list[str] = []
+
+            def get_fin_summary(self, code: str) -> pd.DataFrame:
+                self.calls.append(code)
+                return pd.DataFrame()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / "fundamentals_raw_cache.parquet"
+            unrecorded = pd.DataFrame({"DiscDate": ["2026-06-02"], "DiscNo": ["1"], "Eq": [3.0], "Code": ["10020"]})
+            unrecorded.to_parquet(cache_path, index=False)
+            resumed_client, next_client = Client(), Client()
+
+            options = {"request_interval_sec": 0.0, "sleeper": lambda _: None, "cache_path": cache_path}
+            resumed = fetch_fundamentals(resumed_client, ["10020"], **options)
+            cache_exists_after_resume = cache_path.exists()
+            next_run = fetch_fundamentals(next_client, ["10020"], **options)
+
+            self.assertEqual(resumed_client.calls, ["10020"])
+            self.assertEqual(next_client.calls, [])
+            self.assertTrue(resumed.empty)
+            self.assertFalse(cache_exists_after_resume)
+            self.assertTrue(next_run.empty)
+
 if __name__ == "__main__":
     unittest.main()
