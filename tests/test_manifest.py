@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import jsonschema
 import pandas as pd
+from git_isolation import scrub_inherited_git_environment
 
 from jqqlib.config import DEFAULT_QLIB_ADJUSTMENT, QLIB_ADJUSTMENT_NONE
 from jqqlib.contracts import load_schema
@@ -20,6 +21,8 @@ from jqqlib.manifest import (
     read_dataset_quality_report,
     write_dataset_artifacts,
 )
+
+scrub_inherited_git_environment()
 
 
 def _read_json(path: Path) -> dict[str, Any]:

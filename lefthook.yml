@@ -14,4 +14,4 @@ pre-push:
     - name: mypy
       run: '"${JQQLIB_PYTHON:-.venv/bin/python}" -m mypy'
     - name: unittest
-      run: '"${JQQLIB_PYTHON:-.venv/bin/python}" -m unittest discover -s tests'
+      run: 'env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY -u GIT_PREFIX "${JQQLIB_PYTHON:-.venv/bin/python}" -m unittest discover -s tests'
