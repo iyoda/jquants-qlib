@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import signal
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -308,16 +311,21 @@ class FetchFundamentalsResumeCacheTests(unittest.TestCase):
 
 class FetchFundamentalsKilledRunTests(unittest.TestCase):
     def test_run_killed_at_any_cache_write_resumes_to_the_same_single_file_cache(self) -> None:
-        codes = ["10010", "9999", "10020", "10030"]
+        codes = ["10010", "9999", "10020"]
         with tempfile.TemporaryDirectory() as tmp:
             reference = fetch_fundamentals(_RecordingClient(), codes, **_cache_options(Path(tmp) / "reference"))
 
-        for kill_after_replace in (False, True):
+        for from_0_2_cache, kill_after_replace in itertools.product((False, True), (False, True)):
             replace_number = 1
             while True:
-                with self.subTest(replace_number=replace_number, kill_after_replace=kill_after_replace):
+                with self.subTest(
+                    from_0_2_cache=from_0_2_cache, replace_number=replace_number, kill_after_replace=kill_after_replace
+                ):
                     with tempfile.TemporaryDirectory() as tmp:
                         cache_dir = Path(tmp)
+                        if from_0_2_cache:
+                            history = _disclosures("10010")
+                            _write_0_2_cache(cache_dir, pd.concat([history, history], ignore_index=True), ["10010"])
                         killed = _run_killed_at_replace(codes, cache_dir, replace_number, kill_after_replace)
                         resumed_client, next_client = _RecordingClient(), _RecordingClient()
 
@@ -440,28 +448,41 @@ def _write_0_2_cache(cache_dir: Path, rows: pd.DataFrame | None, attempted: list
     (cache_dir / "fundamentals_raw_cache_attempted.json").write_text(json.dumps(sorted(attempted)), encoding="utf-8")
 
 
+_KILLED_CHILD = (
+    "import sys; sys.path.insert(0, sys.argv[1]); "
+    "from test_fundamentals_fetch_retry import _run_until_killed_at_replace; "
+    "_run_until_killed_at_replace(sys.argv[2:])"
+)
+
+
 def _run_killed_at_replace(codes: list[str], cache_dir: Path, replace_number: int, kill_after: bool) -> bool:
-    pid = os.fork()
-    if pid == 0:
-        real_replace = os.replace
-        count = 0
+    child = subprocess.run(
+        [sys.executable, "-c", _KILLED_CHILD, str(Path(__file__).parent), str(cache_dir), str(replace_number),
+         "after" if kill_after else "before", *codes],
+        check=False,
+    )
+    if child.returncode not in (0, -signal.SIGKILL):
+        raise AssertionError(f"killed run exited with {child.returncode}")
+    return child.returncode == -signal.SIGKILL
 
-        def replace_then_maybe_die(src, dst, **kwargs):
-            nonlocal count
-            count += 1
-            if count == replace_number and not kill_after:
-                os.kill(os.getpid(), signal.SIGKILL)
-            real_replace(src, dst, **kwargs)
-            if count == replace_number:
-                os.kill(os.getpid(), signal.SIGKILL)
 
-        os.replace = replace_then_maybe_die
-        try:
-            fetch_fundamentals(_RecordingClient(), codes, **_cache_options(cache_dir))
-        finally:
-            os._exit(0)
-    _, status = os.waitpid(pid, 0)
-    return os.WIFSIGNALED(status)
+def _run_until_killed_at_replace(args: list[str]) -> None:
+    cache_dir, replace_number, when, *codes = args
+    real_replace = os.replace
+    count = 0
+
+    def replace_then_maybe_die(src, dst, **kwargs):
+        nonlocal count
+        count += 1
+        if count == int(replace_number) and when == "before":
+            os.kill(os.getpid(), signal.SIGKILL)
+        real_replace(src, dst, **kwargs)
+        if count == int(replace_number):
+            os.kill(os.getpid(), signal.SIGKILL)
+
+    os.replace = replace_then_maybe_die
+    fetch_fundamentals(_RecordingClient(), codes, **_cache_options(Path(cache_dir)))
+
 
 if __name__ == "__main__":
     unittest.main()
