@@ -579,6 +579,22 @@ def dataset_quality_report_path(qlib_dir: Path) -> Path:
     return qlib_dir / DATASET_QUALITY_REPORT_FILENAME
 
 
+def read_dataset_manifest(qlib_dir: Path) -> dict[str, Any] | None:
+    """Return the dataset manifest in ``qlib_dir``, or ``None`` when there is none."""
+    path = dataset_manifest_path(qlib_dir)
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def read_dataset_quality_report(qlib_dir: Path) -> dict[str, Any] | None:
+    """Return the dataset quality report in ``qlib_dir``, or ``None`` when there is none."""
+    path = dataset_quality_report_path(qlib_dir)
+    if not path.exists():
+        return None
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
 def write_json_atomic(path: Path, payload: dict[str, Any]) -> Path:
     """Write ``payload`` as indented, key-sorted JSON through a temporary file and an atomic replace.
 
@@ -700,14 +716,14 @@ def _quality_report_payload(
     *,
     parquet_path: Path,
     qlib_dir: Path,
-    manifest: dict[str, Any] | None,
+    manifest: dict[str, Any],
 ) -> dict[str, Any]:
     return {
         "schema_version": DATASET_QUALITY_REPORT_SCHEMA_VERSION,
         "generated_at": _utc_now(),
         "provider_uri": str(qlib_dir),
         "parquet_path": str(parquet_path),
-        "dataset_id": manifest.get("dataset_id") if manifest else None,
+        "dataset_id": manifest.get("dataset_id"),
         "dataset_manifest_ref": str(dataset_manifest_path(qlib_dir)),
         "status": quality["status"],
         "highest_severity": quality["highest_severity"],

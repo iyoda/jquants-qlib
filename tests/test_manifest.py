@@ -16,6 +16,8 @@ from jqqlib.contracts import load_schema
 from jqqlib.manifest import (
     _build_quality_inspection,
     _producer_git_commit,
+    read_dataset_manifest,
+    read_dataset_quality_report,
     write_dataset_artifacts,
 )
 
@@ -153,7 +155,7 @@ class DatasetManifestTests(unittest.TestCase):
             )
             jsonschema.validate(manifest, load_schema("dataset_manifest"))
 
-    def test_dataset_manifest_written_into_qlib_dir_reads_back(self) -> None:
+    def test_write_and_read_dataset_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             parquet_path = root / "daily_quotes.parquet"
@@ -177,11 +179,13 @@ class DatasetManifestTests(unittest.TestCase):
                 qlib_dir=qlib_dir,
                 source={"kind": "test_source"},
             )
-            loaded = _read_json(qlib_dir / "dataset_manifest.json")
+            loaded = read_dataset_manifest(qlib_dir)
 
             self.assertEqual(manifest_path, qlib_dir / "dataset_manifest.json")
             self.assertIsNotNone(loaded)
             self.assertEqual(loaded["provider_uri"], str(qlib_dir))
+            self.assertIsNone(read_dataset_manifest(root / "missing"))
+            self.assertIsNone(read_dataset_quality_report(root / "missing"))
 
     def test_quality_report_records_validation_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -439,8 +443,8 @@ class DatasetManifestTests(unittest.TestCase):
 
             self.assertEqual(manifest_path, qlib_dir / "dataset_manifest.json")
             self.assertEqual(quality_path, qlib_dir / "dataset_quality_report.json")
-            self.assertIsInstance(_read_json(qlib_dir / "dataset_manifest.json"), dict)
-            self.assertIsInstance(_read_json(qlib_dir / "dataset_quality_report.json"), dict)
+            self.assertIsNotNone(read_dataset_manifest(qlib_dir))
+            self.assertIsNotNone(read_dataset_quality_report(qlib_dir))
 
 
 if __name__ == "__main__":

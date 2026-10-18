@@ -18,10 +18,9 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
 
 ### Removed
 
-- The Python functions `build_dataset_manifest`, `build_dataset_quality_report`, `read_dataset_manifest`,
-  `read_dataset_quality_report`, `write_dataset_manifest` and `write_dataset_quality_report` in
-  `jqqlib.manifest`. No command used them. `write_dataset_artifacts` writes both files from one quality
-  inspection; read `dataset_manifest.json` and `dataset_quality_report.json` in `storage.qlib_dir` as JSON.
+- The Python functions `build_dataset_manifest`, `build_dataset_quality_report`, `write_dataset_manifest` and
+  `write_dataset_quality_report` in `jqqlib.manifest`. No command used them. `write_dataset_artifacts` writes
+  both files from one quality inspection; `read_dataset_manifest` and `read_dataset_quality_report` still read them.
 
 ### Fixed
 
