@@ -89,7 +89,7 @@ warn_unused_ignores = true
 # Third-party packages that ship neither stubs nor a py.typed marker. Keep this list to the
 # modules mypy actually reports; do not reintroduce a global ignore_missing_imports.
 [[tool.mypy.overrides]]
-module = ["exchange_calendars.*", "jquantsapi.*", "qlib.*"]
+module = ["exchange_calendars.*", "jquantsapi.*", "pyarrow.*", "qlib.*"]
 ignore_missing_imports = true
 
 [tool.coverage.run]
