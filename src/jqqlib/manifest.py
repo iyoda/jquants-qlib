@@ -579,22 +579,6 @@ def dataset_quality_report_path(qlib_dir: Path) -> Path:
     return qlib_dir / DATASET_QUALITY_REPORT_FILENAME
 
 
-def read_dataset_manifest(qlib_dir: Path) -> dict[str, Any] | None:
-    """Return the dataset manifest in ``qlib_dir``, or ``None`` when there is none."""
-    path = dataset_manifest_path(qlib_dir)
-    if not path.exists():
-        return None
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
-def read_dataset_quality_report(qlib_dir: Path) -> dict[str, Any] | None:
-    """Return the dataset quality report in ``qlib_dir``, or ``None`` when there is none."""
-    path = dataset_quality_report_path(qlib_dir)
-    if not path.exists():
-        return None
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
 def write_json_atomic(path: Path, payload: dict[str, Any]) -> Path:
     """Write ``payload`` as indented, key-sorted JSON through a temporary file and an atomic replace.
 
@@ -638,21 +622,6 @@ def read_csv_source_manifest(csv_path: Path) -> dict[str, Any] | None:
     if not path.exists():
         return None
     return json.loads(path.read_text(encoding="utf-8"))
-
-
-def build_dataset_manifest(
-    *,
-    parquet_path: Path,
-    qlib_dir: Path,
-    source: dict[str, Any],
-    adjustment: str = DEFAULT_QLIB_ADJUSTMENT,
-) -> dict[str, Any]:
-    """Build, without writing it, the dataset manifest for a Parquet file and the Qlib provider built from it."""
-    df = _read_dataset_parquet(parquet_path)
-    quality = _build_quality_inspection(df, qlib_dir, adjustment=adjustment)
-    return _dataset_manifest_payload(
-        df, quality, parquet_path=parquet_path, qlib_dir=qlib_dir, source=source, adjustment=adjustment
-    )
 
 
 def _read_dataset_parquet(parquet_path: Path) -> Any:
@@ -726,24 +695,6 @@ def _dataset_manifest_payload(
     return payload
 
 
-def build_dataset_quality_report(
-    *,
-    parquet_path: Path,
-    qlib_dir: Path,
-    manifest: dict[str, Any] | None = None,
-    adjustment: str = DEFAULT_QLIB_ADJUSTMENT,
-) -> dict[str, Any]:
-    """Build, without writing it, the quality report for a Parquet file and its Qlib provider.
-
-    ``manifest``, when given, supplies the ``dataset_id`` the report refers to.
-    """
-    import pandas as pd
-
-    df = pd.read_parquet(parquet_path)
-    quality = _build_quality_inspection(df, qlib_dir, adjustment=adjustment)
-    return _quality_report_payload(quality, parquet_path=parquet_path, qlib_dir=qlib_dir, manifest=manifest)
-
-
 def _quality_report_payload(
     quality: dict[str, Any],
     *,
@@ -765,34 +716,6 @@ def _quality_report_payload(
         "findings": quality["findings"],
         "checks": quality["checks"],
     }
-
-
-def write_dataset_manifest(
-    *,
-    parquet_path: Path,
-    qlib_dir: Path,
-    source: dict[str, Any],
-    adjustment: str = DEFAULT_QLIB_ADJUSTMENT,
-) -> Path:
-    """Build and atomically write ``dataset_manifest.json`` into ``qlib_dir``; return its path."""
-    payload = build_dataset_manifest(
-        parquet_path=parquet_path, qlib_dir=qlib_dir, source=source, adjustment=adjustment
-    )
-    return write_json_atomic(dataset_manifest_path(qlib_dir), payload)
-
-
-def write_dataset_quality_report(
-    *,
-    parquet_path: Path,
-    qlib_dir: Path,
-    manifest: dict[str, Any] | None = None,
-    adjustment: str = DEFAULT_QLIB_ADJUSTMENT,
-) -> Path:
-    """Build and atomically write ``dataset_quality_report.json`` into ``qlib_dir``; return its path."""
-    payload = build_dataset_quality_report(
-        parquet_path=parquet_path, qlib_dir=qlib_dir, manifest=manifest, adjustment=adjustment
-    )
-    return write_json_atomic(dataset_quality_report_path(qlib_dir), payload)
 
 
 def write_dataset_artifacts(

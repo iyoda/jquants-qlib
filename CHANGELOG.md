@@ -16,6 +16,13 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
   `fundamentals_raw_cache.parquet`: 0.2.0 ignores the footer, queries every code again and appends the
   responses to the rows already in the file, which leaves every code's rows duplicated.
 
+### Removed
+
+- The Python functions `build_dataset_manifest`, `build_dataset_quality_report`, `read_dataset_manifest`,
+  `read_dataset_quality_report`, `write_dataset_manifest` and `write_dataset_quality_report` in
+  `jqqlib.manifest`. No command used them. `write_dataset_artifacts` writes both files from one quality
+  inspection; read `dataset_manifest.json` and `dataset_quality_report.json` in `storage.qlib_dir` as JSON.
+
 ### Fixed
 
 - `run-fundamentals-etl` no longer duplicates a code's rows when a run is killed between the two cache
