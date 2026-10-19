@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jquants-qlib"
-version = "0.2.0"
+version = "0.3.0"
 description = "Daily ETL from the J-Quants API to Parquet and a Qlib dataset for Japanese equities"
 readme = "README.md"
 license = "MIT"
