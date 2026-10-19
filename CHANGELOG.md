@@ -6,6 +6,8 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-19
+
 ### Added
 
 - `run-daily` and `audit` accept `--result-json PATH` and write
