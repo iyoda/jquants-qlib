@@ -204,15 +204,30 @@ XTKS の休場日に当たる平日は、以前の月〜金の判定なら欠損
 
 PIT の規則そのものは [財務](fundamentals.md#pitpoint-in-timeの意味) にあります。
 
-- 試行済みの銘柄は、データのキャッシュとは別のファイルに記録します（`_attempted_codes_sidecar_path`）。
-  開示がまだ無い銘柄（ETF、REIT、新規上場など）は空の応答を返してデータのキャッシュに現れないので、
-  キャッシュだけを「処理済み」とみなすと、再開のたびに同じ銘柄を問い合わせ続けてしまうためです。
+- 試行済みの銘柄は、キャッシュの Parquet のフッター（キー `jqqlib.attempted_codes`）に記録し、行と同じ
+  1 回の置き換えで書きます。開示がまだ無い銘柄（ETF、REIT、新規上場など）は空の応答を返して行に現れないので、
+  行だけを「処理済み」とみなすと、再開のたびに同じ銘柄を問い合わせ続けてしまうためです。
   例外で終わった呼び出しは結果が分からないので、試行済みにしません。
+- 行と記録を 1 ファイルにまとめたのは、0.2.0 までの 2 ファイル構成（Parquet と
+  `fundamentals_raw_cache_attempted.json`）では、2 つの書き込みの間で止まると、記録に無い銘柄の行が残り、
+  再開で同じ行が二重になったためです。1 ファイルなら、どこで止まっても読めるのは完全な前回か今回の内容だけで、
+  読むときの突き合わせが要りません。記録の置き場に pandas の `df.attrs` を使わないのは、実験的な機能で、
+  `pd.concat` で消えるためです。
+- 0.2.0 までのキャッシュは、最初のチェックポイントで 1 ファイルに書き換え、古い記録ファイルを消します。
+  変換では、記録に無い銘柄の行（問い合わせ直すので残すと二重になる）を捨て、旧版の不具合で二重になった
+  まったく同じ行を 1 つにします。同じ行は as-of パネルの値を変えないので、問い合わせ直さずに済みます。
+- 戻り値は、最後に書いた Arrow テーブルを pandas に戻したものです。手元で連結したフレームのまま返すと、
+  ある銘柄だけ列が null のときに dtype が変わり、次の実行がファイルから読むフレームと一致しないためです。
 - `Code` 列は応答の値に関係なく要求した銘柄コードで上書きし、結合キーを揃えます（財務データの事前調査で
   確かめた挙動に合わせたもの）。
-  テスト（上の 2 項目）: `tests/test_fundamentals_fetch_retry.py` の
+  テスト（上の 5 項目）: `tests/test_fundamentals_fetch_retry.py` の
   `test_codes_with_empty_response_are_not_requeried_on_resume`、
-  `test_code_whose_request_raised_is_requested_again_on_resume`、`test_join_key_is_forced_to_the_requested_code`
+  `test_code_whose_request_raised_is_requested_again_on_resume`、
+  `test_run_killed_at_any_cache_write_resumes_to_the_same_single_file_cache`、
+  `test_cache_left_by_0_2_with_duplicated_rows_is_migrated_without_requerying`、
+  `test_0_2_rows_of_an_unrecorded_code_that_now_returns_empty_do_not_come_back`、
+  `test_consecutive_runs_return_equal_frames_when_a_column_is_null_for_one_code`、
+  `test_join_key_is_forced_to_the_requested_code`
 - `CARRY_NUM`（V2 `/fins/summary` の列）は、実データでの取得（ユニバース 500 銘柄中 483 銘柄、
   `pit_violations == 0`）で確かめてから固定した集合です。項目を増やすときは同じ確認をしてください。
 - 同じ日の開示を項目ごとにマージする（`GroupBy.last` は null を飛ばす）のは、業績予想の修正が同時に出た決算の

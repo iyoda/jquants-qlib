@@ -6,6 +6,44 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-19
+
+### Added
+
+- `run-daily` and `audit` accept `--result-json PATH` and write
+  `{"schema_version": 1, "command", "outcome", "exit_code", "error"}` to `PATH` (temporary file and atomic
+  replace) on success, on audit gaps, when the XTKS calendar is unavailable and on every `error:` exit.
+  `outcome` is `completed`, `gaps` (audit only), `calendar_unavailable` or `failed`, so a wrapper can tell
+  these apart without reading stderr. The schema is `jqqlib.contracts.load_schema("cli_result")` and also
+  checks that `command`, `exit_code` and `error` match the `outcome`. Argument
+  errors write no file; a failed write only adds a warning and keeps the exit code. Without the flag the
+  output and exit codes are unchanged.
+
+### Changed
+
+- The fundamentals raw cache is one file. `fundamentals_raw_cache.parquet` now records the queried codes
+  (including codes with no disclosures) in its Parquet footer, written in the same atomic replace as the
+  rows, so a run killed at any point resumes with no duplicate or lost codes.
+  `fundamentals_raw_cache_attempted.json` is no longer used. The first run after upgrading converts a cache
+  written by 0.2.0 or earlier and deletes that file. Before downgrading to 0.2.0, delete
+  `fundamentals_raw_cache.parquet`: 0.2.0 ignores the footer, queries every code again and appends the
+  responses to the rows already in the file, which leaves every code's rows duplicated.
+
+### Removed
+
+- The Python functions `build_dataset_manifest`, `build_dataset_quality_report`, `write_dataset_manifest` and
+  `write_dataset_quality_report` in `jqqlib.manifest`. No command used them. `write_dataset_artifacts` writes
+  both files from one quality inspection; `read_dataset_manifest` and `read_dataset_quality_report` still read them.
+
+### Fixed
+
+- `run-fundamentals-etl` no longer duplicates a code's rows when a run is killed between the two cache
+  writes of 0.2.0 and earlier. Converting an existing cache also collapses rows that this bug had already
+  duplicated, without querying those codes again.
+- A code listed twice in the codes passed to `fetch_fundamentals` is queried once.
+- Two consecutive runs over the same codes now return equal frames, also when a column is null for only
+  some codes.
+
 ## [0.2.0] - 2026-10-16
 
 ### Added

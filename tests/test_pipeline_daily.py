@@ -7,13 +7,16 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
+import jsonschema
 import pyarrow as pa
 import requests
 import yaml
 
 from jqqlib.audit import GapAuditResult
+from jqqlib.contracts import load_schema
 from jqqlib.pipeline import (
     build_parser,
     catch_up_start_date,
@@ -309,6 +312,156 @@ class AuditCommandTests(unittest.TestCase):
             self.assertIn(
                 f"Warning: could not write the audit sidecar {audit_dir / 'last_audit.json'}:", stderr.getvalue()
             )
+
+
+class ResultJsonTests(unittest.TestCase):
+    def _config(self, tmp: str) -> Path:
+        config_path = Path(tmp) / "settings.yaml"
+        config_path.write_text(yaml.safe_dump({"storage": {
+            "parquet_dir": str(Path(tmp) / "parquet"),
+            "qlib_dir": str(Path(tmp) / "qlib"),
+            "audit_dir": str(Path(tmp) / "audit"),
+        }}))
+        return config_path
+
+    def _run(self, argv: list[str], **patches: Any) -> tuple[int, str]:
+        stderr = io.StringIO()
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch("sys.argv", ["jqqlib", *argv]))
+            for target, kwargs in patches.items():
+                stack.enter_context(mock.patch(f"jqqlib.pipeline.{target}", **kwargs))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            stack.enter_context(contextlib.redirect_stderr(stderr))
+            try:
+                main()
+            except SystemExit as exc:
+                return int(exc.code or 0), stderr.getvalue()
+        return 0, stderr.getvalue()
+
+    def _result(self, path: Path) -> dict[str, Any]:
+        document: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
+        jsonschema.validate(document, load_schema("cli_result"))
+        return document
+
+    def test_completed_run_daily_and_audit_write_completed_with_exit_0(self) -> None:
+        patches: dict[str, dict[str, Any]] = {
+            "run-daily": {"run_daily": {"return_value": dt.date(2026, 8, 12)}},
+            "audit": {"run_audit": {"return_value": GapAuditResult(window_business_days=5)}},
+        }
+        for command, patch in patches.items():
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as tmp:
+                result_path = Path(tmp) / "result.json"
+                code, _ = self._run(
+                    [command, "--config", str(self._config(tmp)), "--as-of", "2026-08-12",
+                     "--result-json", str(result_path)],
+                    **patch,
+                )
+                self.assertEqual(code, 0)
+                self.assertEqual(self._result(result_path), {
+                    "schema_version": 1, "command": command, "outcome": "completed", "exit_code": 0, "error": None,
+                })
+
+    def test_audit_with_real_gaps_writes_gaps_with_exit_1(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result_path = Path(tmp) / "result.json"
+            gaps = GapAuditResult(real_gaps=[dt.date(2026, 8, 10)], window_business_days=5)
+            code, _ = self._run(
+                ["audit", "--config", str(self._config(tmp)), "--as-of", "2026-08-12",
+                 "--result-json", str(result_path)],
+                run_audit={"return_value": gaps},
+            )
+            self.assertEqual(code, 1)
+            self.assertEqual(self._result(result_path), {
+                "schema_version": 1, "command": "audit", "outcome": "gaps", "exit_code": 1, "error": None,
+            })
+            self.assertTrue((Path(tmp) / "audit" / "last_audit.json").exists())
+
+    def test_unavailable_calendar_writes_calendar_unavailable_with_exit_2(self) -> None:
+        for command, target in (("audit", "run_audit"), ("run-daily", "run_daily")):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as tmp:
+                result_path = Path(tmp) / "result.json"
+                code, stderr = self._run(
+                    [command, "--config", str(self._config(tmp)), "--result-json", str(result_path)],
+                    **{target: {"side_effect": ExactCalendarRequired("no XTKS")}},
+                )
+                self.assertEqual(code, 2)
+                self.assertIn("XTKS trading calendar unavailable: no XTKS", stderr)
+                self.assertEqual(self._result(result_path), {
+                    "schema_version": 1, "command": command, "outcome": "calendar_unavailable", "exit_code": 2,
+                    "error": None,
+                })
+
+    def test_missing_config_writes_failed_with_exit_2_and_the_error_message(self) -> None:
+        for command in ("run-daily", "audit"):
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as tmp:
+                result_path = Path(tmp) / "result.json"
+                code, stderr = self._run(
+                    [command, "--config", str(Path(tmp) / "missing.yaml"), "--result-json", str(result_path)]
+                )
+                self.assertEqual(code, 2)
+                document = self._result(result_path)
+                self.assertEqual(stderr, f"error: {document['error']}\n")
+                self.assertEqual(
+                    {key: document[key] for key in ("schema_version", "command", "outcome", "exit_code")},
+                    {"schema_version": 1, "command": command, "outcome": "failed", "exit_code": 2},
+                )
+
+    def test_runtime_failure_writes_failed_with_exit_1_and_the_error_message(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result_path = Path(tmp) / "result.json"
+            code, stderr = self._run(
+                ["run-daily", "--config", str(self._config(tmp)), "--result-json", str(result_path)],
+                run_daily={"side_effect": NoDataFetchedError("No data fetched for any day")},
+            )
+            self.assertEqual(code, 1)
+            self.assertEqual(stderr, "error: No data fetched for any day\n")
+            self.assertEqual(self._result(result_path), {
+                "schema_version": 1, "command": "run-daily", "outcome": "failed", "exit_code": 1,
+                "error": "No data fetched for any day",
+            })
+
+    def test_an_unexpected_exit_status_still_writes_a_schema_valid_failed_result(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result_path = Path(tmp) / "result.json"
+            code, _ = self._run(
+                ["audit", "--config", str(self._config(tmp)), "--result-json", str(result_path)],
+                run_audit={"side_effect": SystemExit(5)},
+            )
+            self.assertEqual(code, 5)
+            self.assertEqual(self._result(result_path), {
+                "schema_version": 1, "command": "audit", "outcome": "failed", "exit_code": 5,
+                "error": "exited with status 5",
+            })
+
+    def test_without_the_flag_no_result_file_is_written(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            code, stderr = self._run(
+                ["run-daily", "--config", str(self._config(tmp))],
+                run_daily={"side_effect": NoDataFetchedError("No data fetched for any day")},
+            )
+            self.assertEqual(code, 1)
+            self.assertEqual(stderr, "error: No data fetched for any day\n")
+            self.assertEqual(sorted(path.name for path in Path(tmp).iterdir()), ["settings.yaml"])
+
+    def test_unwritable_result_path_warns_and_keeps_the_original_exit_code(self) -> None:
+        cases: dict[str, tuple[int, dict[str, Any]]] = {
+            "completed": (0, {"return_value": dt.date(2026, 8, 12)}),
+            "failed": (1, {"side_effect": NoDataFetchedError("No data fetched for any day")}),
+            "calendar_unavailable": (2, {"side_effect": ExactCalendarRequired("no XTKS")}),
+        }
+        for outcome, (expected_code, patch) in cases.items():
+            with self.subTest(outcome=outcome), tempfile.TemporaryDirectory() as tmp:
+                not_a_directory = Path(tmp) / "not-a-directory"
+                not_a_directory.write_text("existing file")
+                result_path = not_a_directory / "result.json"
+                code, stderr = self._run(
+                    ["run-daily", "--config", str(self._config(tmp)), "--result-json", str(result_path)],
+                    run_daily=patch,
+                )
+                self.assertEqual(code, expected_code)
+                self.assertIn(f"Warning: could not write the result JSON {result_path}: ", stderr)
+                if outcome == "failed":
+                    self.assertTrue(stderr.startswith("error: No data fetched for any day\n"))
 
 
 class EtlConfigValidationTests(unittest.TestCase):

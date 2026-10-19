@@ -40,7 +40,7 @@ Parquet は観測したままの raw（未調整）です。Qlib 側の価格・
 （PyPI への公開は予定していますが時期未定です）。
 
 ```bash
-pip install "git+https://github.com/iyoda/jquants-qlib@v0.2.0"   # タグ指定（リリース後）
+pip install "git+https://github.com/iyoda/jquants-qlib@v0.3.0"   # タグ指定（リリース後）
 pip install "git+https://github.com/iyoda/jquants-qlib@master"   # 最新リリース（master）
 pip install "git+https://github.com/iyoda/jquants-qlib@dev"      # 開発版（dev）
 ```
@@ -189,7 +189,8 @@ Python 3.10–3.12（[.tool-versions](.tool-versions) は 3.12）。macOS / Linu
 
 JSON schema は `src/jqqlib/contracts/` に同梱し、
 `jqqlib.contracts.load_schema("dataset_manifest")` /
-`jqqlib.contracts.load_schema("dataset_quality_report")` で読み込めます。
+`jqqlib.contracts.load_schema("dataset_quality_report")` /
+`jqqlib.contracts.load_schema("cli_result")`（`--result-json` の結果）で読み込めます。
 インストール済みバージョンは `jqqlib.__version__` で確認できます。
 
 CI の lint（Ruff）は全体に適用します。mypy は `src/jqqlib` 全体を検査し、`scripts/` と

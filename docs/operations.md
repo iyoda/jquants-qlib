@@ -379,6 +379,31 @@ Parquet と Qlib dataset は同じ入力から決定的に再生成できます
 argparse の引数エラー（未知のコマンド、`--config` 欠落など）も exit 2 ですが、こちらは
 argparse の usage メッセージが出ます。
 
+#### 結果 JSON（`--result-json`）
+
+exit 2 はカレンダー不可と設定の誤りで共通、`audit` の exit 1 は欠損と実行時の失敗で共通です。
+ラッパーが stderr の文言を見ずに区別できるよう、`run-daily` と `audit` は `--result-json PATH` を
+受け付け、終了時に結果を `PATH` へ tmp+rename で書きます。
+
+```json
+{"schema_version": 1, "command": "audit", "outcome": "gaps", "exit_code": 1, "error": null}
+```
+
+| `outcome` | 意味 | exit |
+| --- | --- | --- |
+| `completed` | 成功 | 0 |
+| `gaps` | `audit` が欠損を検出（`audit` だけが出す） | 1 |
+| `calendar_unavailable` | XTKS カレンダー不可（監査未実施） | 2 |
+| `failed` | `error: <message>` で終わった失敗。`error` に同じ文言が入る | 1 または 2 |
+
+- `exit_code` は実際の終了コードと同じです。`error` は `failed` のときだけ文字列で、それ以外は `null` です。
+  上の表の `outcome` と `command`・`exit_code`・`error` の組み合わせは schema が検査します。
+- argparse の引数エラーでは書きません。結果 JSON が無いときは exit code だけで判断してください。
+- 書き込みに失敗しても終了コードと元のエラー表示は変わらず、`Warning: could not write the result JSON
+  <path>: ...` を stderr に足すだけです。
+- フラグを付けなければ stdout・stderr・exit code は従来どおりです。schema は
+  `jqqlib.contracts.load_schema("cli_result")`（`src/jqqlib/contracts/cli_result.schema.json`）です。
+
 ### 取りこぼし・欠損期間の再取得
 
 - 短期の取りこぼし（既定の lookback 窓 = 約 10 営業日）は次回の `run-daily` が自動で吸収します。

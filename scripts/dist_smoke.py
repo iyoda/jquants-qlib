@@ -166,7 +166,7 @@ def main() -> None:
     run_cli("--help")
     check_version()
     check_py_typed()
-    for name in ("dataset_manifest", "dataset_quality_report"):
+    for name in ("cli_result", "dataset_manifest", "dataset_quality_report"):
         schema = load_schema(name)
         if not isinstance(schema, dict) or not {"$schema", "properties"} <= schema.keys():
             raise RuntimeError(f"Invalid packaged schema: {name}")

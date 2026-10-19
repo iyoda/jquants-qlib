@@ -12,6 +12,9 @@ from pathlib import Path
 from unittest import mock
 
 from jqqlib.pipeline import evaluate_publish_check, main, run_publish_check
+from tests.git_isolation import scrub_inherited_git_environment
+
+scrub_inherited_git_environment()
 
 
 @contextlib.contextmanager

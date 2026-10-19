@@ -15,37 +15,51 @@ if TYPE_CHECKING:
     from jquantsapi import ClientV2
 
 
-def _read_cache(cache_path: Path) -> list[pd.DataFrame]:
-    import pandas as pd
-
-    if not cache_path.exists():
-        return []
-    cached = pd.read_parquet(cache_path)
-    return [cached] if not cached.empty else []
+_ATTEMPTED_CODES_KEY = b"jqqlib.attempted_codes"
 
 
-def _atomic_write_parquet(df: pd.DataFrame, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = path.with_suffix(path.suffix + ".tmp")
-    df.to_parquet(temp_path, index=False)
-    temp_path.replace(path)
-
-
-def _attempted_codes_sidecar_path(cache_path: Path) -> Path:
+def _legacy_attempted_path(cache_path: Path) -> Path:
     return cache_path.with_name(cache_path.stem + "_attempted.json")
 
 
-def _read_attempted(attempted_path: Path) -> set[str]:
-    if not attempted_path.exists():
-        return set()
-    return set(json.loads(attempted_path.read_text(encoding="utf-8")))
+def _read_cache(cache_path: Path) -> tuple[set[str], list[pd.DataFrame], bool]:
+    import pandas as pd
+    import pyarrow.parquet as pq
+
+    legacy_path = _legacy_attempted_path(cache_path)
+    rows = pd.DataFrame()
+    if cache_path.exists():
+        table = pq.read_table(cache_path)
+        rows = table.to_pandas()
+        metadata = table.schema.metadata or {}
+        if _ATTEMPTED_CODES_KEY in metadata:
+            attempted = set(json.loads(metadata[_ATTEMPTED_CODES_KEY]))
+            return attempted, [rows] if not rows.empty else [], legacy_path.exists()
+    elif not legacy_path.exists():
+        return set(), [], False
+
+    attempted = set(json.loads(legacy_path.read_text(encoding="utf-8"))) if legacy_path.exists() else set()
+    if not rows.empty:
+        rows = rows[rows["Code"].astype(str).isin(attempted)].drop_duplicates(keep="last").reset_index(drop=True)
+    return attempted, [rows] if not rows.empty else [], True
 
 
-def _write_attempted(attempted: set[str], attempted_path: Path) -> None:
-    attempted_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = attempted_path.with_suffix(attempted_path.suffix + ".tmp")
-    temp_path.write_text(json.dumps(sorted(attempted)), encoding="utf-8")
-    temp_path.replace(attempted_path)
+def _write_cache(cache_path: Path, attempted: set[str], frames: list[pd.DataFrame]) -> list[pd.DataFrame]:
+    import pandas as pd
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    rows = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    table = pa.Table.from_pandas(rows, preserve_index=False)
+    record = json.dumps(sorted(attempted)).encode("utf-8")
+    table = table.replace_schema_metadata({**(table.schema.metadata or {}), _ATTEMPTED_CODES_KEY: record})
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = cache_path.with_suffix(cache_path.suffix + ".tmp")
+    pq.write_table(table, temp_path)
+    temp_path.replace(cache_path)
+    _legacy_attempted_path(cache_path).unlink(missing_ok=True)
+    committed = table.to_pandas()
+    return [committed] if not committed.empty else []
 
 
 def fetch_fundamentals(
@@ -72,13 +86,14 @@ def fetch_fundamentals(
     minutes over a real network; a mid-run crash/kill must not throw away
     already-paid-for API calls).
 
-    ``cache_path``, when given, is read for already-QUERIED codes (skipped from
-    this run's ``codes`` -- tracked via a sidecar "attempted" file, not just
-    the codes that happened to return data; see ``_attempted_codes_sidecar_path``) and
-    checkpointed every ``checkpoint_every`` newly queried codes plus once more
-    at the end, so a killed/restarted run resumes from the last checkpoint
-    instead of requerying everything (including codes with legitimately empty
-    responses).
+    ``cache_path``, when given, is one Parquet file holding the rows of every
+    code queried so far and, in its footer, the list of those codes (including
+    codes with legitimately empty responses). This run skips those codes, and
+    each checkpoint, every ``checkpoint_every`` newly queried codes plus once
+    more at the end, replaces the file atomically, so a killed or restarted run
+    resumes from the last checkpoint. A cache written by jqqlib 0.2.0 or earlier
+    (a Parquet file plus ``fundamentals_raw_cache_attempted.json``) is converted
+    at the first checkpoint. A code listed twice in ``codes`` is queried once.
     ``max_new_codes``, when given, bounds how many NOT-yet-attempted codes this
     call queries, so one invocation can be kept short enough to finish
     comfortably inside a bounded execution window; call again (same
@@ -86,27 +101,13 @@ def fetch_fundamentals(
     """
     import pandas as pd
 
-    cached_frames = _read_cache(cache_path) if cache_path is not None else []
-    attempted_path = _attempted_codes_sidecar_path(cache_path) if cache_path is not None else None
-    attempted = _read_attempted(attempted_path) if attempted_path is not None else set()
+    attempted, frames, unsaved = _read_cache(cache_path) if cache_path is not None else (set(), [], False)
 
-    todo = [str(code) for code in codes if str(code) not in attempted]
+    todo = list(dict.fromkeys(str(code) for code in codes if str(code) not in attempted))
     if max_new_codes is not None:
         todo = todo[:max_new_codes]
 
     pacer = _RequestPacer(request_interval_sec, sleeper)
-    new_frames: list[pd.DataFrame] = []
-    newly_attempted: set[str] = set()
-
-    def _checkpoint() -> None:
-        if cache_path is None or attempted_path is None:
-            return
-        if new_frames:
-            combined = pd.concat(cached_frames + new_frames, ignore_index=True)
-            _atomic_write_parquet(combined, cache_path)
-        if newly_attempted:
-            _write_attempted(attempted | newly_attempted, attempted_path)
-
     for i, code in enumerate(todo, 1):
         pacer.before_request()
         df = call_jquants_with_retry(
@@ -117,18 +118,19 @@ def fetch_fundamentals(
             jitter_sec=retry_jitter_sec,
             sleeper=sleeper,
         )
-        newly_attempted.add(code)
+        attempted.add(code)
         if df is not None and not df.empty:
             df = df.copy()
-            df["Code"] = str(code)
-            new_frames.append(df)
-        if i % checkpoint_every == 0:
-            _checkpoint()
+            df["Code"] = code
+            frames.append(df)
+        unsaved = True
+        if cache_path is not None and i % checkpoint_every == 0:
+            frames, unsaved = _write_cache(cache_path, attempted, frames), False
 
-    _checkpoint()
+    if cache_path is not None and unsaved:
+        frames = _write_cache(cache_path, attempted, frames)
 
-    all_frames = cached_frames + new_frames
-    if not all_frames:
+    if not frames:
         return pd.DataFrame()
 
-    return pd.concat(all_frames, ignore_index=True)
+    return pd.concat(frames, ignore_index=True)
