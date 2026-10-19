@@ -397,6 +397,7 @@ exit 2 はカレンダー不可と設定の誤りで共通、`audit` の exit 1 
 | `failed` | `error: <message>` で終わった失敗。`error` に同じ文言が入る | 1 または 2 |
 
 - `exit_code` は実際の終了コードと同じです。`error` は `failed` のときだけ文字列で、それ以外は `null` です。
+  上の表の `outcome` と `command`・`exit_code`・`error` の組み合わせは schema が検査します。
 - argparse の引数エラーでは書きません。結果 JSON が無いときは exit code だけで判断してください。
 - 書き込みに失敗しても終了コードと元のエラー表示は変わらず、`Warning: could not write the result JSON
   <path>: ...` を stderr に足すだけです。

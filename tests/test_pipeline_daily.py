@@ -420,6 +420,19 @@ class ResultJsonTests(unittest.TestCase):
                 "error": "No data fetched for any day",
             })
 
+    def test_an_unexpected_exit_status_still_writes_a_schema_valid_failed_result(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            result_path = Path(tmp) / "result.json"
+            code, _ = self._run(
+                ["audit", "--config", str(self._config(tmp)), "--result-json", str(result_path)],
+                run_audit={"side_effect": SystemExit(5)},
+            )
+            self.assertEqual(code, 5)
+            self.assertEqual(self._result(result_path), {
+                "schema_version": 1, "command": "audit", "outcome": "failed", "exit_code": 5,
+                "error": "exited with status 5",
+            })
+
     def test_without_the_flag_no_result_file_is_written(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             code, stderr = self._run(

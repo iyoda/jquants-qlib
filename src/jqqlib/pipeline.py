@@ -831,7 +831,10 @@ def _add_result_json_flag(parser: argparse.ArgumentParser) -> None:
         default=None,
         type=Path,
         metavar="PATH",
-        help="Also write the outcome and exit code as JSON to PATH (schema: contracts/cli_result.schema.json).",
+        help=(
+            "Also write the outcome and exit code as JSON to PATH "
+            '(schema: jqqlib.contracts.load_schema("cli_result")).'
+        ),
     )
 
 
@@ -1028,7 +1031,9 @@ def main() -> None:
         _dispatch(args)
     except SystemExit as exc:
         if result_json is not None:
-            _write_cli_result(result_json, args.command, _outcome_of_exit(args.command, exc), _exit_status(exc), None)
+            outcome = _outcome_of_exit(args.command, exc)
+            error = _unexpected_exit_message(exc) if outcome == "failed" else None
+            _write_cli_result(result_json, args.command, outcome, _exit_status(exc), error)
         raise
     except (ValueError, OSError, RuntimeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
@@ -1063,6 +1068,10 @@ def _outcome_of_exit(command: str, exc: SystemExit) -> str:
     if command == "audit" and status == 1:
         return "gaps"
     return "failed"
+
+
+def _unexpected_exit_message(exc: SystemExit) -> str:
+    return exc.code if isinstance(exc.code, str) else f"exited with status {_exit_status(exc)}"
 
 
 def _write_cli_result(path: Path, command: str, outcome: str, exit_code: int, error: str | None) -> None:

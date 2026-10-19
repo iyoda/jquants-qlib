@@ -10,5 +10,25 @@
     "outcome": { "enum": ["completed", "gaps", "calendar_unavailable", "failed"] },
     "exit_code": { "type": "integer" },
     "error": { "type": ["string", "null"] }
-  }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "outcome": { "const": "completed" } } },
+      "then": { "properties": { "exit_code": { "const": 0 }, "error": { "type": "null" } } }
+    },
+    {
+      "if": { "properties": { "outcome": { "const": "gaps" } } },
+      "then": {
+        "properties": { "command": { "const": "audit" }, "exit_code": { "const": 1 }, "error": { "type": "null" } }
+      }
+    },
+    {
+      "if": { "properties": { "outcome": { "const": "calendar_unavailable" } } },
+      "then": { "properties": { "exit_code": { "const": 2 }, "error": { "type": "null" } } }
+    },
+    {
+      "if": { "properties": { "outcome": { "const": "failed" } } },
+      "then": { "properties": { "exit_code": { "not": { "const": 0 } }, "error": { "type": "string" } } }
+    }
+  ]
 }
