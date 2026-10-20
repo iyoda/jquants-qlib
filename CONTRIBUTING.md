@@ -129,6 +129,7 @@ inside the extracted sdist (fresh venv with `.[dev]` from that sdist, or the reb
 the sdist's tests).
 See [releasing](docs/releasing.md) for the complete release and compatibility policy. When bumping
 the version, update `[project].version` in `pyproject.toml` and `version` in `CITATION.cff` together.
+`jqqlib.__version__` reads the installed metadata, so do not hard-code the version anywhere else.
 
 ## Synthetic fixtures
 
