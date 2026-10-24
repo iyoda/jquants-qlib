@@ -61,6 +61,9 @@ coverage run -m unittest discover -s tests && coverage report
 - **Never commit market data or credentials.** `data/`, `downloads/`, `config.yaml` and `.envrc` are gitignored on purpose. The J-Quants terms of service do not allow redistributing the data.
 - Keep the pipeline deterministic: identical inputs must produce byte-identical Parquet and the same `lineage.parquet_sha256`.
 - Changes to `dataset_manifest.json` / `dataset_quality_report.json` must keep `src/jqqlib/contracts/*.schema.json` in sync with the code. `tests/test_contracts_package.py` checks the packaged schemas load, and `tests/test_manifest.py` validates a generated manifest against them; update both when the schema changes. Bump `schema_version` for breaking changes.
+- Parquet stays raw (vendor `adjustment_factor`, never cumulative factors); read [price adjustment](docs/jquants-price-adjustment.md)
+  and [operations](docs/operations.md) before changing ETL or the Qlib dump. Release tags are created by `release.yml`,
+  never pushed by hand ([releasing](docs/releasing.md)).
 - Add or update a unittest for every behaviour change. The suite is `unittest`, not pytest.
 - Comments and docstrings follow [the rules below](#comments-and-docstrings).
 - Keep pull requests focused. Describe *why* in the PR body and link the issue if one exists.
