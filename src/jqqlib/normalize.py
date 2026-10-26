@@ -99,7 +99,7 @@ def normalize_for_qlib(df: pd.DataFrame, *, require_adjustment_factor: bool = Fa
     if "ExRT" in normalized.columns:
         normalized["ex_rights_type"] = normalized["ExRT"].map(_ex_rights_as_str)
 
-    normalized["symbol"] = normalized["symbol"].astype(str)
+    normalized["symbol"] = normalized["symbol"].astype(str).where(normalized["symbol"].notna())
     normalized["date"] = pd.to_datetime(normalized["date"]).dt.strftime("%Y-%m-%d")
 
     columns = list(PARQUET_BASE_COLUMNS)

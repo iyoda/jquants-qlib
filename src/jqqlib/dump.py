@@ -7,6 +7,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
+from ._symbols import symbol_errors
 from .adjust import apply_vendor_adjustment
 from .config import QLIB_ADJUSTMENT_VENDOR_FACTOR, VALID_QLIB_ADJUSTMENTS
 from .normalize import QLIB_FIELDS, QLIB_FIELDS_WITH_FACTOR
@@ -106,10 +107,16 @@ def _preflight_parquet(parquet_path: Path, fields: tuple[str, ...]):
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols:
         raise ValueError(f"Missing columns for Qlib conversion: {', '.join(missing_cols)}")
+    errors = symbol_errors(df["symbol"].unique())
+    if errors:
+        raise ValueError("; ".join(errors))
     return df
 
 
 def _dump_frame_to_staging(df, staged_qlib_dir: Path, fields: tuple[str, ...]) -> None:
+    errors = symbol_errors(df["symbol"].unique())
+    if errors:
+        raise ValueError("; ".join(errors))
     from .qlib_dump import DumpDataAll
 
     with tempfile.TemporaryDirectory(prefix="qlib_csv_") as tmp_dir:
@@ -118,6 +125,8 @@ def _dump_frame_to_staging(df, staged_qlib_dir: Path, fields: tuple[str, ...]) -
         staged_files = 0
         for symbol, symbol_df in df.groupby("symbol"):
             out_csv = csv_dir / f"{symbol}.csv"
+            if out_csv.resolve().parent != csv_dir.resolve():
+                raise ValueError(f"Unsafe symbol: {symbol!r}")
             symbol_df[["date", *fields]].sort_values("date").to_csv(out_csv, index=False)
             staged_files += 1
 
