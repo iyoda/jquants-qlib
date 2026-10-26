@@ -4,12 +4,45 @@ import tempfile
 import unittest
 from pathlib import Path
 
+import pandas as pd
+
 from jqqlib.dump import parquet_to_qlib
 from jqqlib.store import csv_to_parquet, write_parquet
+from jqqlib.validate import qlib_readiness_errors
 from tests.test_dump import _dataset, _seed_generated_tree
 
 
 class SymbolPathTests(unittest.TestCase):
+    def test_null_symbols_are_rejected_before_conversion_in_both_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            provider = root / "qlib"
+            marker = _seed_generated_tree(provider)
+            for value in (None, float("nan"), pd.NA):
+                frame = _dataset(["10010"])
+                frame.loc[0, "symbol"] = value
+                self.assertIn("Null symbol", qlib_readiness_errors(frame))
+                parquet = root / "input.parquet"
+                frame.to_parquet(parquet)
+                for mode in ("none", "vendor_factor"):
+                    with self.subTest(value=value, mode=mode):
+                        with self.assertRaisesRegex(ValueError, "Null symbol"):
+                            parquet_to_qlib(parquet, provider, adjustment=mode)
+                        self.assertEqual(marker.read_bytes(), b"stale")
+
+    def test_null_vendor_codes_do_not_become_literal_symbol_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "daily_quotes.parquet"
+            output.write_bytes(b"original")
+            for value in (None, float("nan"), pd.NA):
+                with self.subTest(value=value):
+                    frame = _dataset(["10010"]).rename(columns={"symbol": "Code"})
+                    frame.loc[0, "Code"] = value
+                    with self.assertRaisesRegex(RuntimeError, "Null symbol"):
+                        write_parquet(frame, root)
+                    self.assertEqual(output.read_bytes(), b"original")
+
     def test_unsafe_symbols_leave_provider_and_external_csv_unchanged_in_both_modes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

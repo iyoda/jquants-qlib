@@ -25,6 +25,7 @@ jobs:
           python-version: "3.12"
       - run: |
           python -m venv "$RUNNER_TEMP/runtime"
+          "$RUNNER_TEMP/runtime/bin/python" -m pip install --upgrade pip
           "$RUNNER_TEMP/runtime/bin/python" -m pip install -e .
           python -m venv "$RUNNER_TEMP/auditor"
           "$RUNNER_TEMP/auditor/bin/python" -m pip install pip-audit==2.10.1

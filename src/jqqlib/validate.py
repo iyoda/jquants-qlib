@@ -43,7 +43,7 @@ def qlib_readiness_errors(df: pd.DataFrame) -> list[str]:
     Checks:
     - required columns exist
     - date is parseable
-    - symbol is non-empty
+    - symbol is non-null, non-empty, safe as a filename, and has no filename collisions
     - OHLCV/amount columns are numeric when non-null
     - adjustment_factor is present, numeric, finite, and positive
     - partial OHLCV null rows are rejected as incomplete bars

@@ -261,6 +261,9 @@ PIT の規則そのものは [財務](fundamentals.md#pitpoint-in-timeの意味)
 The accepted grammar starts with an ASCII letter or digit and otherwise permits letters, digits, dot,
 underscore and hyphen. Japanese stock codes containing letters remain supported. Symbols are not stripped,
 lowercased or rewritten in Parquet; unsafe input is rejected rather than sanitized into a different instrument.
+Null symbols are checked before string conversion, and normalization preserves missing codes for that check.
+The preflight check prevents creating build staging for invalid Parquet; the staging entry point repeats it
+to protect internal callers that supply a frame directly.
 
 The HTTP client and MLflow dependency floors prevent installing known-vulnerable releases. MLflow also
 needs an explicit floor because resolving newer pandas versions can otherwise backtrack to an obsolete
