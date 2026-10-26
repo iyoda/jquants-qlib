@@ -253,3 +253,18 @@ PIT の規則そのものは [財務](fundamentals.md#pitpoint-in-timeの意味)
   [リリース手順](releasing.md)）、`jqqlib` がインストール済みの wheel から解決されることを確かめます。CLI は
   pip の利用者と同じく、インタープリタの隣の console script で動かします（`installed_jqqlib_console_script`）。
   wheel には `tests/` が入らないので、CSV はインラインのフォールバック（`write_inline_csv`）で作ります。
+
+## Symbol filename boundary
+
+`symbol_errors` rejects unsafe symbol filenames and case-insensitive Qlib filename collisions before writing.
+`test_unsafe_symbols_leave_provider_and_external_csv_unchanged_in_both_modes` covers both adjustment modes.
+The accepted grammar starts with an ASCII letter or digit and otherwise permits letters, digits, dot,
+underscore and hyphen. Japanese stock codes containing letters remain supported. Symbols are not stripped,
+lowercased or rewritten in Parquet; unsafe input is rejected rather than sanitized into a different instrument.
+Null symbols are checked before string conversion, and normalization preserves missing codes for that check.
+The preflight check prevents creating build staging for invalid Parquet; the staging entry point repeats it
+to protect internal callers that supply a frame directly.
+
+The HTTP client and MLflow dependency floors prevent installing known-vulnerable releases. MLflow also
+needs an explicit floor because resolving newer pandas versions can otherwise backtrack to an obsolete
+MLflow release with incomplete upper bounds; its protobuf imports fail when Qlib initializes its recorder.

@@ -6,6 +6,15 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-26
+
+### Security
+
+- Validate symbol filenames before storing or converting quotes, including raw adjustment mode.
+  Reject unsafe paths and symbols that collide after Qlib filename normalization before writing files.
+- Audit resolved dependencies in pull requests, weekly, and before releases.
+- Require patched HTTP clients and MLflow, preventing resolution backtracking to obsolete MLflow releases.
+
 ## [0.3.0] - 2026-10-19
 
 ### Added
