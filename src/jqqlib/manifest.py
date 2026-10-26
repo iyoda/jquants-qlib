@@ -133,7 +133,7 @@ def _adjustment_policy(adjustment: str = DEFAULT_QLIB_ADJUSTMENT) -> dict[str, A
 
 
 def _utc_now() -> str:
-    return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return dt.datetime.now(dt.UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _date_or_none(value: Any) -> str | None:

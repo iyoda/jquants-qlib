@@ -268,3 +268,14 @@ to protect internal callers that supply a frame directly.
 The HTTP client and MLflow dependency floors prevent installing known-vulnerable releases. MLflow also
 needs an explicit floor because resolving newer pandas versions can otherwise backtrack to an obsolete
 MLflow release with incomplete upper bounds; its protobuf imports fail when Qlib initializes its recorder.
+
+## pandas 3 migration probe
+
+`scripts/pandas_migration_probe.py` writes only invented data under a new output root.
+Run it with pandas 2.3.3 and the candidate, passing the baseline Parquet via
+`--legacy-parquet` to the candidate, and compare content.json. Its environment.json
+separates the dependency versions and Parquet metadata hash from content.
+The volume value 100000004.00000001 exercises CSV parsing at a float32 rounding
+boundary: pandas 2.3.3 yields 100000000, while pandas 3.1.0 yields 100000008.
+This synthetic witness contains no market data. A passing single-environment
+`tests/test_pandas_migration.py` does not substitute for the cross-version comparison.

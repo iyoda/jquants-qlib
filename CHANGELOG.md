@@ -6,6 +6,24 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-26
+
+### Changed
+
+- Require Python >=3.11,<3.13, pandas >=3.1,<4, NumPy >=2.0.2 and PyArrow >=16.
+- Test pandas 3.1.0 and latest stable 3.x on Python 3.11 and 3.12.
+- Preserve existing Parquet upsert and Qlib output contracts during migration.
+- Add an offline migration probe covering legacy upsert, missing/blank/alphanumeric symbols,
+  corrections, duplicate rows, split/rights adjustments, failed-write preservation, and PIT
+  consistency across second/millisecond/microsecond/nanosecond calendars.
+
+Python 3.10 and pandas 2 users must upgrade their Python and dependencies. CLI, configuration,
+JSON schemas and Qlib fields are unchanged. Existing Parquet files continue with ordinary
+upsert; do not regenerate history. Parquet metadata/hash may change once after upgrading,
+causing one additional publish. Validate and audit before publishing; replaying identical
+input must be a no-op. Roll back the package and its dependency environment together; do not
+automatically roll back market data or the publish ledger.
+
 ## [0.3.1] - 2026-10-26
 
 ### Security
