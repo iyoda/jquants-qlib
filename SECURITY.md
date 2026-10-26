@@ -35,7 +35,7 @@ in the J-Quants dashboard first, then report the path that leaked it.
 
 | Version | Security fixes |
 | --- | --- |
-| Latest released minor series (currently `0.1.x`), latest patch | Supported |
+| Latest released minor series (currently `0.3.x`), latest patch | Supported |
 | Older minor series or superseded patches | Upgrade to the latest supported release |
 | Unreleased development versions | No release support guarantee |
 

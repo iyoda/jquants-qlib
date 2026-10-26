@@ -6,6 +6,7 @@ import datetime as dt
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ._symbols import symbol_errors
 from .normalize import PARQUET_BASE_COLUMNS, QLIB_FIELDS
 
 if TYPE_CHECKING:
@@ -67,6 +68,7 @@ def qlib_readiness_errors(df: pd.DataFrame) -> list[str]:
     empty_symbol_count = int((symbol_series == "").sum())
     if empty_symbol_count:
         errors.append(f"Empty symbol rows: {empty_symbol_count}")
+    errors.extend(symbol_errors(df["symbol"].unique()))
 
     for field in QLIB_FIELDS:
         converted = pd.to_numeric(df[field], errors="coerce")
