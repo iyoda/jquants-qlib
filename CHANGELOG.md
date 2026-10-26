@@ -24,6 +24,13 @@ causing one additional publish. Validate and audit before publishing; replaying 
 input must be a no-op. Roll back the package and its dependency environment together; do not
 automatically roll back market data or the publish ledger.
 
+### Fixed
+
+- Every Qlib float32 bin now equals the direct float32 conversion of the adjusted float64
+  values. pandas 2's CSV parser misread values that fall near a float32 rounding midpoint,
+  which put some volume values one float32 step (up to 8 shares) off. The affected bins
+  change once after upgrading.
+
 ## [0.3.1] - 2026-10-26
 
 ### Security
