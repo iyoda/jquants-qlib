@@ -20,13 +20,14 @@ mypy
 `lefthook install` sets up the git hooks in `lefthook.yml`: on commit, `ruff check` and
 `scripts/check_comments.py` run on the staged Python files; on push, `mypy` and the unittest suite
 run. The hooks use `.venv/bin/python`; set `JQQLIB_PYTHON` to use another interpreter. Hooks can be
-skipped locally, so CI runs the same checks in the required `lint + type-check` job.
+skipped locally, so CI runs the same checks in the required `lint + type-check` job; never rely on `--no-verify`.
 
 `jqqlib` is the console script installed by the package; `python -m jqqlib` is equivalent.
 `jqqlib init-config [PATH]` writes the packaged example configuration (default `./config.yaml`,
 `--force` to overwrite). For a checkout, `cp config.example.yaml config.yaml` does the same; the
 root file and `src/jqqlib/data/config.example.yaml` must stay byte-identical, and a unittest
-enforces it, so edit both when you change a setting.
+enforces it, so edit both when you change a setting. Configuration and argument errors exit 2 with
+`error: <message>` on stderr and no traceback.
 
 Tests need neither a J-Quants API key nor a `config.yaml`. A few tests are skipped when `git` is not available.
 When `CI` is set (for example `CI=1`), `tests/test_cli.py` fails instead of skipping if the
@@ -61,6 +62,19 @@ coverage run -m unittest discover -s tests && coverage report
 - **Never commit market data or credentials.** `data/`, `downloads/`, `config.yaml` and `.envrc` are gitignored on purpose. The J-Quants terms of service do not allow redistributing the data.
 - Keep the pipeline deterministic: identical inputs must produce byte-identical Parquet and the same `lineage.parquet_sha256`.
 - Changes to `dataset_manifest.json` / `dataset_quality_report.json` must keep `src/jqqlib/contracts/*.schema.json` in sync with the code. `tests/test_contracts_package.py` checks the packaged schemas load, and `tests/test_manifest.py` validates a generated manifest against them; update both when the schema changes. Bump `schema_version` for breaking changes.
+- Parquet stays raw: it requires `adjustment_factor` (optional `ex_rights_type`) and never stores cumulative factors;
+  the Qlib dump computes `$factor` from it. Read [price adjustment](docs/jquants-price-adjustment.md) and
+  [operations](docs/operations.md) before changing ETL or the dump. Invariants the code and tests hold:
+  - `qlib.adjustment: vendor_factor` (default) refuses a source without an `AdjFactor` / `AdjustmentFactor` column
+    (`RuntimeError`); per-row null factors become 1.0 with a warning. `qlib.adjustment: none` writes the six raw
+    fields and no `factor` file.
+  - `write_parquet` runs the `validate` readiness checks before replacing the Parquet (failure: `RuntimeError`,
+    Parquet unchanged), and the `vendor_factor` dump runs the same checks before writing (CLI: `error:`, exit 1).
+  - `run-daily` refuses `etl.merge_mode: replace`.
+- Release tags are created by `release.yml` when a push to `master` brings a new `## [X.Y.Z]` CHANGELOG section;
+  never push tags by hand ([releasing](docs/releasing.md)).
+- Load the packaged schemas with `jqqlib.contracts.load_schema`. `src/jqqlib/qlib_dump.py` is adapted from
+  microsoft/qlib `scripts/dump_bin.py` (MIT); keep `THIRD_PARTY_NOTICES.md` in sync with it.
 - Add or update a unittest for every behaviour change. The suite is `unittest`, not pytest.
 - Comments and docstrings follow [the rules below](#comments-and-docstrings).
 - Keep pull requests focused. Describe *why* in the PR body and link the issue if one exists.
@@ -100,7 +114,7 @@ while private vulnerability reporting is not enabled, use the `security_report` 
 
 ## Distribution checks
 
-Use Python 3.10–3.12. Build from a checkout whose `dist/` has no older artifacts:
+Use Python 3.10–3.12 (`.tool-versions` pins 3.12). Build from a checkout whose `dist/` has no older artifacts:
 
 ```bash
 python -m build
@@ -129,6 +143,8 @@ inside the extracted sdist (fresh venv with `.[dev]` from that sdist, or the reb
 the sdist's tests).
 See [releasing](docs/releasing.md) for the complete release and compatibility policy. When bumping
 the version, update `[project].version` in `pyproject.toml` and `version` in `CITATION.cff` together.
+`jqqlib.__version__` reads the installed metadata (`0+unknown` when not installed), so do not hard-code the version
+anywhere else.
 
 ## Synthetic fixtures
 
