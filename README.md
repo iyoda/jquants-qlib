@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/iyoda/jquants-qlib/actions/workflows/ci.yml/badge.svg)](https://github.com/iyoda/jquants-qlib/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/iyoda/jquants-qlib/actions/workflows/codeql.yml/badge.svg)](https://github.com/iyoda/jquants-qlib/actions/workflows/codeql.yml)
-[![Python 3.10–3.12](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue.svg)](pyproject.toml)
+[![Python 3.11–3.12](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue.svg)](pyproject.toml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 **English summary** — A daily ETL pipeline that pulls Japanese equity daily bars from the
@@ -144,7 +144,7 @@ jqqlib run-all --config config.yaml --start 2026-07-01 --end 2026-07-03
 
 ## 対応環境
 
-Python 3.10–3.12（[.tool-versions](.tool-versions) は 3.12）。macOS / Linux のみ対応
+Python 3.11–3.12（[.tool-versions](.tool-versions) は 3.12）。macOS / Linux のみ対応
 （Windows 非対応: symlink publish と Keychain 分岐のため）。
 
 ## 主要コマンド一覧
@@ -217,3 +217,16 @@ CI の lint（Ruff）は全体に適用します。mypy は `src/jqqlib` 全体�
 このリポジトリは市場データを配布しません。
 J-Quants 規約により取得データは再配布できません。`data/`、`downloads/`、
 資格情報を含む `config.yaml` は Git 管理対象に含めないでください。
+
+### Dependency compatibility (0.4.0)
+
+| Component | Supported |
+| --- | --- |
+| Python | >=3.11,<3.13 |
+| pandas | >=3.1,<4 |
+| NumPy | >=2.0.2 |
+| PyArrow | >=16 |
+
+Python 3.10 and pandas 2 are no longer supported. Existing pandas 2 Parquet files
+can continue through normal upsert; no bulk regeneration is required. CI tests
+pandas 3.1.0 and the latest stable 3.x on both supported Python versions.

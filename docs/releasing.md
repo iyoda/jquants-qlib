@@ -60,7 +60,7 @@ first, then `dev` is merged into `master`.
    yet, so the first release `v0.1.0` turns the current `Unreleased` section into `[0.1.0] - <date>`.
    The release workflow releases only when this heading exists and uses exactly that section as
    the GitHub Release notes. Include compatibility and migration instructions for breaking changes.
-3. In a Python 3.10–3.12 development environment, run:
+3. In a Python 3.11–3.12 development environment, run:
 
    ```bash
    python -m pip install -e ".[dev]"

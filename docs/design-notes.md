@@ -268,3 +268,25 @@ to protect internal callers that supply a frame directly.
 The HTTP client and MLflow dependency floors prevent installing known-vulnerable releases. MLflow also
 needs an explicit floor because resolving newer pandas versions can otherwise backtrack to an obsolete
 MLflow release with incomplete upper bounds; its protobuf imports fail when Qlib initializes its recorder.
+
+## pandas 3 migration probe
+
+`scripts/pandas_migration_probe.py` writes only invented data under a new output root.
+Run it with pandas 2.3.3 and the candidate, passing the baseline Parquet via
+`--legacy-parquet` to the candidate, and compare content.json. Its environment.json
+separates the dependency versions and Parquet metadata hash from content.
+The volume value 100000004.00000001 exercises CSV parsing at a float32 rounding
+boundary: pandas 2.3.3 yields 100000000, while pandas 3.1.0 yields 100000008.
+This synthetic witness contains no market data.
+
+The correctly rounded float64 of that text is 100000004.0000000149…, whose float32
+is 100000008. pandas 2.3.3's default C parser reads it as exactly 100000004.0, the
+midpoint between two float32 neighbours, and round-half-even then gives 100000000.
+The difference is therefore a pandas 2 parsing error, not a pandas 3 regression.
+The acceptance criterion is that every bin equals the direct float32 conversion of
+the adjusted float64 frame passed to the dump, not byte equality with pandas 2.
+`test_bins_equal_direct_float32_of_adjusted_float64` asserts this within one
+environment, so a regression in CSV parsing fails without a cross-version run;
+it fails on pandas 2.3.3 at the witness. Writing bins straight from the frame,
+without the intermediate CSV, would remove the parser dependency entirely and is
+left to a separate change.

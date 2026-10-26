@@ -114,7 +114,7 @@ while private vulnerability reporting is not enabled, use the `security_report` 
 
 ## Distribution checks
 
-Use Python 3.10–3.12 (`.tool-versions` pins 3.12). Build from a checkout whose `dist/` has no older artifacts:
+Use Python 3.11–3.12 (`.tool-versions` pins 3.12). Build from a checkout whose `dist/` has no older artifacts:
 
 ```bash
 python -m build
