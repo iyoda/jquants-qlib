@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "jquants-qlib"
-version = "0.3.1"
+version = "0.4.0"
 description = "Daily ETL from the J-Quants API to Parquet and a Qlib dataset for Japanese equities"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.11,<3.13"
 authors = [{ name = "IYODA Atsushi" }]
 keywords = ["j-quants", "qlib", "japanese-equities", "quant", "etl", "parquet"]
 classifiers = [
@@ -17,7 +17,6 @@ classifiers = [
   "Intended Audience :: Financial and Insurance Industry",
   "Intended Audience :: Science/Research",
   "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Operating System :: POSIX :: Linux",
@@ -26,12 +25,12 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = [
-  "pandas>=2.1",
-  "numpy>=1.26",
+  "pandas>=3.1,<4",
+  "numpy>=2.0.2",
   "requests>=2.33",
   "urllib3>=2.8",
   "exchange_calendars>=4.13.2,<5",
-  "pyarrow>=14.0",
+  "pyarrow>=16",
   "PyYAML>=6.0",
   "jquants-api-client>=1.7",
   "pyqlib>=0.9",
@@ -71,7 +70,7 @@ jqqlib = ["contracts/*.json", "data/*.yaml", "py.typed"]
 
 [tool.ruff]
 line-length = 120
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "D1", "ERA001", "PGH003", "PGH004", "RUF100"]
@@ -86,7 +85,7 @@ files = ["src/jqqlib"]
 enable_error_code = ["ignore-without-code"]
 warn_unused_ignores = true
 # `python_version = "3.10"` is not usable here: current numpy stubs use 3.12-only syntax.
-# The CI test matrix (3.10-3.12) is the guard against 3.11+-only stdlib APIs such as datetime.UTC.
+# The CI test matrix covers Python 3.11 and 3.12.
 
 # Third-party packages that ship neither stubs nor a py.typed marker. Keep this list to the
 # modules mypy actually reports; do not reintroduce a global ignore_missing_imports.

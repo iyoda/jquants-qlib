@@ -478,6 +478,6 @@ mypy
 
 成功時は最後に `OK` と表示されます。資格情報欠如・不正 JSON などの negative path の
 意図的な診断メッセージも出ますが、最終結果で判定してください。`git` がない環境では
-publish-check の一部が skip されます。CI は Python 3.10 / 3.11 / 3.12 のテストと
+publish-check の一部が skip されます。CI は Python 3.11 / 3.12 のテストと
 lint / type / 配布物の検証を行います。mypy は `src/jqqlib` 全体を検査し、`scripts/` と
 `tests/` はまだ型検査の対象外です（[開発手順](../CONTRIBUTING.md)を参照）。

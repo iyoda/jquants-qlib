@@ -34,7 +34,7 @@ class LedgerError(RuntimeError):
 
 
 def _utc_now_iso() -> str:
-    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return dt.datetime.now(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def ledger_entry_from_manifest(

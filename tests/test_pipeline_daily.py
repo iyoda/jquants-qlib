@@ -218,7 +218,7 @@ class RunDailyTests(unittest.TestCase):
     def test_parse_as_of_date_today_is_asia_tokyo(self) -> None:
         # 2026-06-04 16:00 UTC is already 2026-06-05 01:00 in Asia/Tokyo; using
         # naive local time or UTC would still report 2026-06-04.
-        utc_instant = dt.datetime(2026, 6, 4, 16, 0, tzinfo=dt.timezone.utc)
+        utc_instant = dt.datetime(2026, 6, 4, 16, 0, tzinfo=dt.UTC)
         seen_tz: list[dt.tzinfo] = []
 
         def fake_now(tz: dt.tzinfo) -> dt.datetime:
