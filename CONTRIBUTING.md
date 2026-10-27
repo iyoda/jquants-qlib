@@ -80,6 +80,8 @@ coverage run -m unittest discover -s tests && coverage report
 - Keep pull requests focused. Describe *why* in the PR body and link the issue if one exists.
 - Target the `dev` branch (the repository default). `master` only receives release merges from
   `dev`; a merge into `master` triggers the release workflow (see [releasing](docs/releasing.md)).
+- Merge pull requests into `dev` with a squash merge (`gh pr merge --squash`). The release merge
+  from `dev` into `master` stays a merge commit; never squash it.
 
 ## Comments and docstrings
 
