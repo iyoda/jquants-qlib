@@ -48,7 +48,7 @@ from .manifest import (
     write_dataset_artifacts,
     write_json_atomic,
 )
-from .provider_lock import ProviderLockedError, provider_write_lock
+from .provider_lock import LockMode, ProviderLockedError, provider_locks
 from .publish import publish_dataset_build
 from .store import (
     DEFAULT_PARQUET_FILENAME,
@@ -1094,15 +1094,21 @@ def _write_cli_result(path: Path, command: str, outcome: str, exit_code: int, er
         print(f"Warning: could not write the result JSON {path}: {exc}", file=sys.stderr)
 
 
-def _configured_qlib_dir(args: argparse.Namespace) -> Path:
-    return Path(load_config(Path(args.config))["storage"]["qlib_dir"])
+_ProviderLockRequests = tuple[tuple[Path, LockMode], ...]
 
 
-def _publish_target(args: argparse.Namespace) -> Path:
-    return Path(args.provider_uri)
+def _configured_qlib_dir(args: argparse.Namespace) -> _ProviderLockRequests:
+    return ((Path(load_config(Path(args.config))["storage"]["qlib_dir"]), LockMode.EXCLUSIVE),)
 
 
-_PROVIDER_WRITTEN_BY_COMMAND: dict[str, Callable[[argparse.Namespace], Path] | None] = {
+def _publish_target_and_build(args: argparse.Namespace) -> _ProviderLockRequests:
+    return (
+        (Path(args.provider_uri), LockMode.EXCLUSIVE),
+        (Path(args.build_provider_uri), LockMode.SHARED),
+    )
+
+
+_PROVIDER_WRITTEN_BY_COMMAND: dict[str, Callable[[argparse.Namespace], _ProviderLockRequests] | None] = {
     "init-config": None,
     "run-etl": _configured_qlib_dir,
     "convert": _configured_qlib_dir,
@@ -1114,7 +1120,7 @@ _PROVIDER_WRITTEN_BY_COMMAND: dict[str, Callable[[argparse.Namespace], Path] | N
     "audit": None,
     "publish-check": None,
     "ledger": None,
-    "publish": _publish_target,
+    "publish": _publish_target_and_build,
     "publish-paths": None,
 }
 
@@ -1123,7 +1129,7 @@ def _provider_lock_of(args: argparse.Namespace) -> contextlib.AbstractContextMan
     provider_of = _PROVIDER_WRITTEN_BY_COMMAND[args.command]
     if provider_of is None:
         return contextlib.nullcontext()
-    return provider_write_lock(provider_of(args))
+    return provider_locks(provider_of(args))
 
 
 def _dispatch(args: argparse.Namespace) -> None:

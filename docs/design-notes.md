@@ -132,9 +132,18 @@ dump の subtree 置き換えと manifest・quality report の書き込みは別
 - ロックファイルは provider の外、隣に置きます。中に置くと snapshot の copy に混ざるためです。親ディレクトリだけを
   解決し、最後の要素は解決しません。`publish` が symlink の向き先を切り替えても、同じ名前の provider には同じ
   ロックが対応するようにするためです。ロックファイルは消しません。消すと、開いたままの古いファイルと新しい
-  ファイルで 2 つのプロセスが同時にロックを持てるためです。名前: `provider_lock_path`。
+  ファイルで 2 つのプロセスが同時にロックを持てるためです。名前: `provider_lock_paths`。
   テスト: `test_lock_file_sits_beside_the_provider_so_a_copy_of_the_tree_never_contains_it`、
   `test_publish_fails_fast_while_the_provider_symlink_is_locked`
+- 名前のロックだけでは、symlink の公開名と build の実 path が別のロックになり、片方で copy している tree に
+  もう片方の名前で書けてしまいます。そこで最後の要素まで解決した実体の隣のロックも取ります。symlink でなければ
+  2 つは同じファイルなので 1 つだけ取ります。待たずに失敗させるので順序で deadlock は起きませんが、同時に
+  始めた 2 つがどちらも途中で引き返すことを減らすため、path の順に取ります。
+  名前: `provider_locks`、`LockMode`。テスト: `test_a_symlink_name_and_the_build_it_points_at_exclude_each_other`
+- 表の値はコマンドが取るロックの列（path と排他か共有か）です。`publish` は公開先を排他、公開する build を共有で
+  取ります。build を読む側として扱うので、同じ build の `publish` どうしは重なれて、build を書いている writer
+  とだけ排他になります。名前: `_publish_target_and_build`。
+  テスト: `test_publish_fails_fast_while_a_writer_is_still_writing_the_build`
 - 読み手は共有ロックです。copy どうしは重なってよく、書き込みとだけ排他にすればよいためです。
   名前: `provider_read_lock`。テスト: `test_readers_share_the_lock_and_together_still_keep_a_writer_out`、
   `test_reader_lock_fails_fast_while_a_writer_holds_the_lock`

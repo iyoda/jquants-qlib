@@ -14,7 +14,7 @@ import jsonschema
 
 from jqqlib.contracts import load_schema
 from jqqlib.pipeline import _PROVIDER_WRITTEN_BY_COMMAND, build_parser, run_bootstrap_csv
-from jqqlib.provider_lock import ProviderLockedError, provider_lock_path, provider_read_lock, provider_write_lock
+from jqqlib.provider_lock import ProviderLockedError, provider_lock_paths, provider_read_lock, provider_write_lock
 from tests.support.synthetic import write_synthetic_daily_quotes_csv
 
 PROVIDER_LOCKED_EXIT_CODE = 75
@@ -92,7 +92,9 @@ class ProviderLockCliTests(unittest.TestCase):
     def assert_refused_as_locked(self, result: subprocess.CompletedProcess[str], provider: Path) -> None:
         self.assertEqual(result.returncode, PROVIDER_LOCKED_EXIT_CODE, result.stderr)
         self.assertIn("error:", result.stderr)
-        self.assertIn(str(provider_lock_path(provider)), result.stderr)
+        self.assertTrue(
+            any(str(lock) in result.stderr for lock in provider_lock_paths(provider)), result.stderr,
+        )
         self.assertNotIn("Traceback", result.stderr)
 
     def test_writer_commands_fail_fast_and_leave_the_provider_unchanged_while_another_process_holds_the_lock(self):
@@ -168,11 +170,39 @@ class ProviderLockCliTests(unittest.TestCase):
         self.assertEqual(published.returncode, 0, published.stderr)
         self.assertEqual(provider.resolve(), second_build.resolve())
 
+    def test_publish_fails_fast_while_a_writer_is_still_writing_the_build(self):
+        root = Path(self._tmp.name)
+        first_build, second_build = root / "builds" / "first", root / "builds" / "second"
+        first_build.mkdir(parents=True)
+        second_build.mkdir()
+        provider = root / "current"
+        provider.symlink_to(first_build, target_is_directory=True)
+        publish = ("publish", "--build-provider-uri", str(second_build), "--provider-uri", str(provider))
+        with lock_held_by_another_process("write", second_build):
+            self.assert_refused_as_locked(run_jqqlib(*publish), second_build)
+            self.assertEqual(provider.resolve(), first_build.resolve())
+        with lock_held_by_another_process("read", second_build):
+            published = run_jqqlib(*publish)
+            self.assertEqual(published.returncode, 0, published.stderr)
+        self.assertEqual(provider.resolve(), second_build.resolve())
+
+    def test_a_symlink_name_and_the_build_it_points_at_exclude_each_other(self):
+        root = Path(self._tmp.name)
+        published_name = root / "published"
+        published_name.symlink_to(self.qlib_dir, target_is_directory=True)
+        before = self.provider_bytes()
+        with lock_held_by_another_process("read", published_name):
+            self.assert_refused_as_locked(run_jqqlib("convert", "--config", self.config), self.qlib_dir)
+            self.assertEqual(self.provider_bytes(), before)
+        with lock_held_by_another_process("write", self.qlib_dir):
+            with self.assertRaises(ProviderLockedError), provider_read_lock(published_name):
+                self.fail("a reader took the lock through a symlink while a writer held the real build")
+
     def test_lock_file_sits_beside_the_provider_so_a_copy_of_the_tree_never_contains_it(self):
         convert = run_jqqlib("convert", "--config", self.config)
         self.assertEqual(convert.returncode, 0, convert.stderr)
-        self.assertEqual(provider_lock_path(self.qlib_dir), self.qlib_dir.parent.resolve() / ".qlib.write.lock")
-        self.assertTrue(provider_lock_path(self.qlib_dir).is_file())
+        self.assertEqual(provider_lock_paths(self.qlib_dir), (self.qlib_dir.parent.resolve() / ".qlib.write.lock",))
+        self.assertTrue(provider_lock_paths(self.qlib_dir)[0].is_file())
         self.assertEqual([path for path in self.qlib_dir.rglob("*") if "lock" in path.name], [])
 
 

@@ -13,6 +13,10 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
   process holds it, the command exits 75 at once and leaves the provider unchanged.
 - `jqqlib.provider_lock.provider_read_lock` lets a reader copy a provider while every writer
   command stays out. `provider_write_lock` gives library callers the same lock as the CLI.
+- `publish` also holds a shared lock on `--build-provider-uri`, so it refuses to publish a build
+  that a writer is still writing.
+- A provider that is a symlink is locked both by its name and by the tree it resolves to, so a
+  reader and a writer that use different paths for the same tree still exclude each other.
 
 ## [0.4.0] - 2026-10-26
 

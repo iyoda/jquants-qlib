@@ -27,7 +27,7 @@ from jqqlib.pipeline import (
     run_daily,
     validate_etl_config,
 )
-from jqqlib.provider_lock import provider_lock_path
+from jqqlib.provider_lock import provider_lock_paths
 from jqqlib.store import NoDataFetchedError
 from jqqlib.trading_calendar import ExactCalendarRequired
 
@@ -442,9 +442,9 @@ class ResultJsonTests(unittest.TestCase):
             )
             self.assertEqual(code, 1)
             self.assertEqual(stderr, "error: No data fetched for any day\n")
-            lock_beside_the_provider = provider_lock_path(Path(tmp) / "qlib").name
+            locks_beside_the_provider = [path.name for path in provider_lock_paths(Path(tmp) / "qlib")]
             self.assertEqual(
-                sorted(path.name for path in Path(tmp).iterdir()), sorted([lock_beside_the_provider, "settings.yaml"])
+                sorted(path.name for path in Path(tmp).iterdir()), sorted([*locks_beside_the_provider, "settings.yaml"])
             )
 
     def test_unwritable_result_path_warns_and_keeps_the_original_exit_code(self) -> None:
