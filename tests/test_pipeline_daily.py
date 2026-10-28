@@ -27,6 +27,7 @@ from jqqlib.pipeline import (
     run_daily,
     validate_etl_config,
 )
+from jqqlib.provider_lock import provider_lock_path
 from jqqlib.store import NoDataFetchedError
 from jqqlib.trading_calendar import ExactCalendarRequired
 
@@ -441,7 +442,10 @@ class ResultJsonTests(unittest.TestCase):
             )
             self.assertEqual(code, 1)
             self.assertEqual(stderr, "error: No data fetched for any day\n")
-            self.assertEqual(sorted(path.name for path in Path(tmp).iterdir()), ["settings.yaml"])
+            lock_beside_the_provider = provider_lock_path(Path(tmp) / "qlib").name
+            self.assertEqual(
+                sorted(path.name for path in Path(tmp).iterdir()), sorted([lock_beside_the_provider, "settings.yaml"])
+            )
 
     def test_unwritable_result_path_warns_and_keeps_the_original_exit_code(self) -> None:
         cases: dict[str, tuple[int, dict[str, Any]]] = {
@@ -531,8 +535,13 @@ class CliExitCodeTests(unittest.TestCase):
 
     def test_run_daily_without_data_exits_1_not_as_a_config_error(self) -> None:
         stderr = io.StringIO()
+        tmp = self.enterContext(tempfile.TemporaryDirectory())
+        config_path = Path(tmp) / "config.yaml"
+        config_path.write_text(yaml.safe_dump({"storage": {
+            "parquet_dir": str(Path(tmp) / "parquet"), "qlib_dir": str(Path(tmp) / "qlib"),
+        }}))
         with (
-            mock.patch("sys.argv", ["jqqlib", "run-daily", "--config", "config.yaml", "--as-of", "2026-06-05"]),
+            mock.patch("sys.argv", ["jqqlib", "run-daily", "--config", str(config_path), "--as-of", "2026-06-05"]),
             mock.patch("jqqlib.pipeline.run_daily", side_effect=NoDataFetchedError("No data fetched for any day")),
             contextlib.redirect_stderr(stderr),
             self.assertRaises(SystemExit) as raised,

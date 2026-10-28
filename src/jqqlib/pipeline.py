@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime as dt
 import json
 import logging
@@ -47,6 +48,7 @@ from .manifest import (
     write_dataset_artifacts,
     write_json_atomic,
 )
+from .provider_lock import ProviderLockedError, provider_write_lock
 from .publish import publish_dataset_build
 from .store import (
     DEFAULT_PARQUET_FILENAME,
@@ -996,8 +998,11 @@ def cli_error_exit_code(exc: BaseException) -> int:
     other J-Quants API/network errors (``requests`` exceptions subclass
     ``OSError``), and unreadable Parquet (pyarrow errors subclass
     ``ValueError``). ``RuntimeError`` is a dataset-state failure (e.g. data
-    that is not Qlib-ready), reported like a failed check.
+    that is not Qlib-ready), reported like a failed check. ``ProviderLockedError``
+    exits 75: another process holds the provider lock, and running again later can succeed.
     """
+    if isinstance(exc, ProviderLockedError):
+        return _PROVIDER_LOCKED_EXIT_CODE
     if isinstance(exc, (RuntimeError, NoDataFetchedError)):
         return 1
     if isinstance(exc, Exception) and _error_status(exc) in _AUTH_STATUSES:
@@ -1007,6 +1012,7 @@ def cli_error_exit_code(exc: BaseException) -> int:
     return 2
 
 
+_PROVIDER_LOCKED_EXIT_CODE = 75
 _RUN_FAILURE_EXCEPTION_CLASSES = (("requests", "RequestException"), ("pyarrow", "ArrowException"))
 
 
@@ -1022,7 +1028,7 @@ def main() -> None:
     """Entry point of the ``jqqlib`` console script.
 
     Errors are printed as one ``error: <message>`` line on stderr instead of a traceback; the exit code comes from
-    ``cli_error_exit_code`` (2 = user error, 1 = failed run).
+    ``cli_error_exit_code`` (2 = user error, 1 = failed run, 75 = provider locked by another process).
     """
     args = build_parser().parse_args()
     result_json = getattr(args, "result_json", None)
@@ -1088,7 +1094,44 @@ def _write_cli_result(path: Path, command: str, outcome: str, exit_code: int, er
         print(f"Warning: could not write the result JSON {path}: {exc}", file=sys.stderr)
 
 
+def _configured_qlib_dir(args: argparse.Namespace) -> Path:
+    return Path(load_config(Path(args.config))["storage"]["qlib_dir"])
+
+
+def _publish_target(args: argparse.Namespace) -> Path:
+    return Path(args.provider_uri)
+
+
+_PROVIDER_WRITTEN_BY_COMMAND: dict[str, Callable[[argparse.Namespace], Path] | None] = {
+    "init-config": None,
+    "run-etl": None,
+    "convert": _configured_qlib_dir,
+    "validate": None,
+    "bootstrap-csv": _configured_qlib_dir,
+    "download-csv": None,
+    "run-all": _configured_qlib_dir,
+    "run-daily": _configured_qlib_dir,
+    "audit": None,
+    "publish-check": None,
+    "ledger": None,
+    "publish": _publish_target,
+    "publish-paths": None,
+}
+
+
+def _provider_lock_of(args: argparse.Namespace) -> contextlib.AbstractContextManager[None]:
+    provider_of = _PROVIDER_WRITTEN_BY_COMMAND[args.command]
+    if provider_of is None:
+        return contextlib.nullcontext()
+    return provider_write_lock(provider_of(args))
+
+
 def _dispatch(args: argparse.Namespace) -> None:
+    with _provider_lock_of(args):
+        _run_command(args)
+
+
+def _run_command(args: argparse.Namespace) -> None:
     if args.command == "init-config":
         path = init_config(Path(args.path), force=args.force)
         print(f"Configuration written: {path}")
