@@ -1104,7 +1104,7 @@ def _publish_target(args: argparse.Namespace) -> Path:
 
 _PROVIDER_WRITTEN_BY_COMMAND: dict[str, Callable[[argparse.Namespace], Path] | None] = {
     "init-config": None,
-    "run-etl": None,
+    "run-etl": _configured_qlib_dir,
     "convert": _configured_qlib_dir,
     "validate": None,
     "bootstrap-csv": _configured_qlib_dir,

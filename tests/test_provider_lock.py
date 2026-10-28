@@ -100,6 +100,7 @@ class ProviderLockCliTests(unittest.TestCase):
         writer_commands = {
             "convert": ("convert", "--config", self.config),
             "bootstrap-csv": ("bootstrap-csv", "--config", self.config, "--csv", str(self.csv_path)),
+            "run-etl": ("run-etl", "--config", self.config, "--start", "2026-06-08", "--end", "2026-06-08"),
             "run-all": ("run-all", "--config", self.config, "--start", "2026-06-08", "--end", "2026-06-08"),
             "run-daily": (
                 "run-daily", "--config", self.config, "--as-of", "2026-06-08", "--result-json", str(daily_result),

@@ -8,8 +8,8 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
 
 ### Added
 
-- `convert`, `bootstrap-csv`, `run-all`, `run-daily` and `publish` hold an exclusive lock on the
-  provider for the whole command, in `.<name>.write.lock` beside the provider. When another
+- `convert`, `bootstrap-csv`, `run-all`, `run-daily`, `publish` and `run-etl` (which writes the
+  provider's source Parquet) hold an exclusive lock on the provider for the whole command, in `.<name>.write.lock` beside the provider. When another
   process holds it, the command exits 75 at once and leaves the provider unchanged.
 - `jqqlib.provider_lock.provider_read_lock` lets a reader copy a provider while every writer
   command stays out. `provider_write_lock` gives library callers the same lock as the CLI.

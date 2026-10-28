@@ -123,6 +123,8 @@ dump の subtree 置き換えと manifest・quality report の書き込みは別
   `with` にしないのは、新しいコマンドで書き忘れても気づけないためです。表に無いコマンドはテストで落ちます。
   名前: `_PROVIDER_WRITTEN_BY_COMMAND`、`_provider_lock_of`。
   テスト: `test_every_subcommand_declares_whether_it_writes_a_provider`
+- `run-etl` は provider を書きませんが表ではロックを取ります。`convert` は Parquet を dump と manifest で二度読むので、
+  その間に `run-etl` が Parquet を替えると manifest の `lineage.parquet_sha256` と bins が食い違うためです。
 - 待たずに失敗させます（exit 75、sysexits の EX_TEMPFAIL と同じ値）。日次の取り込みが手動の実行や copy の後ろで黙って
   待つと、遅れの原因が見えなくなるためです。exit 1・2 と分けるのは、再実行すれば通る失敗だからです。
   名前: `ProviderLockedError`、`_PROVIDER_LOCKED_EXIT_CODE`。

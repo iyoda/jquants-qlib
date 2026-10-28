@@ -247,8 +247,10 @@ build ディレクトリが無い場合や公開先が実ディレクトリの�
 
 ### 4.5) Provider の書き込みロック
 
-provider を書くコマンド（`convert`、`bootstrap-csv`、`run-all`、`run-daily`、`publish`）は、コマンドの
-最初から最後まで provider の排他ロックを持ちます。`features` / `calendars` / `instruments` の置き換えと
+provider を書くコマンド（`convert`、`bootstrap-csv`、`run-all`、`run-daily`、`publish`）と、provider の元になる
+Parquet を書く `run-etl` は、コマンドの最初から最後まで provider の排他ロックを持ちます。`run-etl` を含めるのは、
+`convert` が Parquet を dump と manifest で二度読むので、その間に Parquet が替わると manifest の
+`lineage.parquet_sha256` と bins が食い違うからです。`features` / `calendars` / `instruments` の置き換えと
 manifest・quality report の書き込みは、同じロックの中で行います。ロックの対象は `storage.qlib_dir`
 （`publish` では `--provider-uri`）です。
 
@@ -256,7 +258,7 @@ manifest・quality report の書き込みは、同じロックの中で行いま
   provider の中には置かないので、provider を丸ごと copy しても入りません。ファイルは消さずに残します。
 - 別のプロセスがロックを持っていれば待たずに exit 75 で止まり、provider は変わりません。
   `run-daily --result-json` では `outcome: failed`、`exit_code: 75` です。
-- `validate`、`audit`、`publish-check`、`publish-paths`、`ledger`、`run-etl`、`download-csv`、`init-config` は
+- `validate`、`audit`、`publish-check`、`publish-paths`、`ledger`、`download-csv`、`init-config` は
   provider を書かないのでロックを取らず、ロック中でも動きます。
 - provider を copy する側は `jqqlib.provider_lock.provider_read_lock(<provider>)` の中で copy します。読み手どうしは
   同時に持てます。持っている間は書き込みコマンドが exit 75 で止まります。書き込みコマンドが動いている間は、
