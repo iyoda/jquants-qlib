@@ -113,6 +113,33 @@ run-daily の取り込み範囲と、途中で失敗したときの挙動は [�
 
 上の 3 件のテストは `tests/test_pipeline_daily.py` にあります。
 
+### provider の書き込みロック（`provider_lock.py`）
+
+provider を書くコマンドが互いに、また provider を copy する読み手と重ならないようにするロックです。
+dump の subtree 置き換えと manifest・quality report の書き込みは別々の手順なので、途中で読むと二つの世代が
+混ざって見えます。ロックが無いと、日次ラッパーの外から手で `run-all` を実行したときに防げません。
+
+- どのコマンドがどの provider を書くかは 1 つの表に置き、dispatch がその表からロックを取ります。コマンドごとの
+  `with` にしないのは、新しいコマンドで書き忘れても気づけないためです。表に無いコマンドはテストで落ちます。
+  名前: `_PROVIDER_WRITTEN_BY_COMMAND`、`_provider_lock_of`。
+  テスト: `test_every_subcommand_declares_whether_it_writes_a_provider`
+- 待たずに失敗させます（exit 75、sysexits の EX_TEMPFAIL と同じ値）。日次の取り込みが手動の実行や copy の後ろで黙って
+  待つと、遅れの原因が見えなくなるためです。exit 1・2 と分けるのは、再実行すれば通る失敗だからです。
+  名前: `ProviderLockedError`、`_PROVIDER_LOCKED_EXIT_CODE`。
+  テスト: `test_writer_commands_fail_fast_and_leave_the_provider_unchanged_while_another_process_holds_the_lock`
+- ロックファイルは provider の外、隣に置きます。中に置くと snapshot の copy に混ざるためです。親ディレクトリだけを
+  解決し、最後の要素は解決しません。`publish` が symlink の向き先を切り替えても、同じ名前の provider には同じ
+  ロックが対応するようにするためです。ロックファイルは消しません。消すと、開いたままの古いファイルと新しい
+  ファイルで 2 つのプロセスが同時にロックを持てるためです。名前: `provider_lock_path`。
+  テスト: `test_lock_file_sits_beside_the_provider_so_a_copy_of_the_tree_never_contains_it`、
+  `test_publish_fails_fast_while_the_provider_symlink_is_locked`
+- 読み手は共有ロックです。copy どうしは重なってよく、書き込みとだけ排他にすればよいためです。
+  名前: `provider_read_lock`。テスト: `test_readers_share_the_lock_and_together_still_keep_a_writer_out`、
+  `test_reader_lock_fails_fast_while_a_writer_holds_the_lock`
+- `ledger.py` のロックは使い回しません。台帳の追記は待つのが正しく、ロックもファイルの隣の名前で決まるためです。
+
+テストはいずれも `tests/test_provider_lock.py` にあります。
+
 ### publish-check
 
 - `git show` はパスをリポジトリのルートから解決するので、manifest のパスはルートからの相対パスに直します。
