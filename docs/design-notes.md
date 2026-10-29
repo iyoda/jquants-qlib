@@ -113,6 +113,64 @@ run-daily の取り込み範囲と、途中で失敗したときの挙動は [�
 
 上の 3 件のテストは `tests/test_pipeline_daily.py` にあります。
 
+### provider の書き込みロック（`provider_lock.py`）
+
+provider を書くコマンドが互いに、また provider を copy する読み手と重ならないようにするロックです。
+dump の subtree 置き換えと manifest・quality report の書き込みは別々の手順なので、途中で読むと二つの世代が
+混ざって見えます。ロックが無いと、日次ラッパーの外から手で `run-all` を実行したときに防げません。
+
+- どのコマンドがどの provider を書くかは 1 つの表に置き、dispatch がその表からロックを取ります。コマンドごとの
+  `with` にしないのは、新しいコマンドで書き忘れても気づけないためです。表に無いコマンドはテストで落ちます。
+  名前: `_PROVIDER_WRITTEN_BY_COMMAND`、`_provider_lock_of`。
+  テスト: `test_every_subcommand_declares_whether_it_writes_a_provider`
+- `run-etl` は provider を書きませんが表ではロックを取ります。`convert` は Parquet を dump と manifest で二度読むので、
+  その間に `run-etl` が Parquet を替えると manifest の `lineage.parquet_sha256` と bins が食い違うためです。
+  Parquet そのものも `storage.parquet_dir` のロックで守ります。`qlib_dir` の違う 2 つの設定が同じ Parquet を
+  書くことがあるためです。書くコマンドは排他、読むだけの `convert` は共有です。`run-etl` が `qlib_dir` の
+  ロックも取り続けるのは、`qlib_dir` だけをロックして Parquet を置き換える呼び出し側を締め出すためです。
+  名前: `_configured_storage`。
+  テスト: `test_commands_that_touch_the_parquet_fail_fast_while_another_process_writes_it`
+- 待たずに失敗させます（exit 75、sysexits の EX_TEMPFAIL と同じ値）。日次の取り込みが手動の実行や copy の後ろで黙って
+  待つと、遅れの原因が見えなくなるためです。exit 1・2 と分けるのは、再実行すれば通る失敗だからです。
+  名前: `ProviderLockedError`、`_PROVIDER_LOCKED_EXIT_CODE`。
+  テスト: `test_writer_commands_fail_fast_and_leave_the_provider_unchanged_while_another_process_holds_the_lock`
+- ロックファイルは provider の外、隣に置きます。中に置くと snapshot の copy に混ざるためです。親ディレクトリだけを
+  解決し、最後の要素は解決しません。`publish` が symlink の向き先を切り替えても、同じ名前の provider には同じ
+  ロックが対応するようにするためです。ロックファイルは消しません。消すと、開いたままの古いファイルと新しい
+  ファイルで 2 つのプロセスが同時にロックを持てるためです。名前: `provider_lock_paths`。
+  テスト: `test_lock_file_sits_beside_the_provider_so_a_copy_of_the_tree_never_contains_it`、
+  `test_publish_fails_fast_while_the_provider_symlink_is_locked`
+- 名前のロックだけでは、symlink の公開名と build の実 path が別のロックになり、片方で copy している tree に
+  もう片方の名前で書けてしまいます。そこで最後の要素まで解決した実体の隣のロックも取ります。symlink でなければ
+  2 つは同じファイルなので 1 つだけ取ります。待たずに失敗させるので順序で deadlock は起きませんが、同時に
+  始めた 2 つがどちらも途中で引き返すことを減らすため、path の順に取ります。
+  名前: `provider_locks`、`LockMode`。テスト: `test_a_symlink_name_and_the_build_it_points_at_exclude_each_other`
+- symlink の先は、解決してからロックを取るまでの間に `publish` で替わりえます。そのままだと、古い build の
+  ロックを持ったまま新しい build を読み、新しい build の writer と重なります。そこで全部を取った後にロックファイルを
+  解決し直し、違えば全部を放して取り直します。名前のロックを持っている間は `publish` が排他を取れないので、
+  確かめた後に向き先は変わりません。3 回続けて替わったら待たずに `ProviderLockedError` にします。
+  名前: `_RESOLVE_ATTEMPTS`。
+  テスト: `test_a_reader_holds_the_build_the_symlink_points_at_after_publish_swaps_it_mid_lock`
+- path は `os.path.abspath` で正規化しません。`link/../qlib` の `..` を文字の上で消すと、OS が開くディレクトリと
+  別のロックになるためです。親ディレクトリは `resolve` で OS と同じ順にたどります。
+  テスト: `test_dot_dot_after_a_symlink_locks_the_directory_the_os_opens`
+- ロックは `flock` なので同じホストの中でしか効きません。分散実行で別のホストが同じ provider を書くことは
+  このロックでは防げず、書くホストを 1 台に限る運用で防ぎます。
+- `publish` が張り替える symlink は、provider の path の最後の 1 段だけを想定します。path の途中の symlink、
+  symlink を指す symlink、読み手と publisher が別ユーザーの構成は守りません。どれも日次の取り込みでは起きず、
+  守るには OS と同じ順に path を 1 段ずつたどってすべての symlink をロックする必要があり、まれな構成のために
+  ロックが複雑になるためです。
+- 表の値はコマンドが取るロックの列（path と排他か共有か）です。`publish` は公開先を排他、公開する build を共有で
+  取ります。build を読む側として扱うので、同じ build の `publish` どうしは重なれて、build を書いている writer
+  とだけ排他になります。名前: `_publish_target_and_build`。
+  テスト: `test_publish_fails_fast_while_a_writer_is_still_writing_the_build`
+- 読み手は共有ロックです。copy どうしは重なってよく、書き込みとだけ排他にすればよいためです。
+  名前: `provider_read_lock`。テスト: `test_readers_share_the_lock_and_together_still_keep_a_writer_out`、
+  `test_reader_lock_fails_fast_while_a_writer_holds_the_lock`
+- `ledger.py` のロックは使い回しません。台帳の追記は待つのが正しく、ロックもファイルの隣の名前で決まるためです。
+
+テストはいずれも `tests/test_provider_lock.py` にあります。
+
 ### publish-check
 
 - `git show` はパスをリポジトリのルートから解決するので、manifest のパスはルートからの相対パスに直します。

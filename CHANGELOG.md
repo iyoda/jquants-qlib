@@ -6,6 +6,24 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
 
 ## [Unreleased]
 
+### Added
+
+- `convert`, `bootstrap-csv`, `run-all`, `run-daily`, `publish` and `run-etl` (which writes the
+  provider's source Parquet) hold an exclusive lock on the provider for the whole command, in `.<name>.write.lock` beside the provider. When another
+  process holds it, the command exits 75 at once and leaves the provider unchanged.
+- `jqqlib.provider_lock.provider_read_lock` lets a reader copy a provider while every writer
+  command stays out. `provider_write_lock` gives library callers the same lock as the CLI.
+- `publish` also holds a shared lock on `--build-provider-uri`, so it refuses to publish a build
+  that a writer is still writing.
+- A provider that is a symlink is locked both by its name and by the tree it resolves to, so a
+  reader and a writer that use different paths for the same tree still exclude each other.
+- Commands that write the Parquet also lock `storage.parquet_dir` exclusively, and `convert` locks it
+  shared, so two configs with different `qlib_dir` cannot write the same Parquet at once.
+- After taking every lock, the lock files are resolved again and taken again if `publish` moved a
+  symlink in between. A `..` after a symlink locks the directory the OS opens. The lock is host-local.
+  The symlink `publish` swaps must be the last component of the provider path, not a symlink above
+  it or in a chain of symlinks.
+
 ## [0.4.0] - 2026-10-26
 
 ### Changed
