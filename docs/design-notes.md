@@ -154,6 +154,12 @@ dump の subtree 置き換えと manifest・quality report の書き込みは別
 - path は `os.path.abspath` で正規化しません。`link/../qlib` の `..` を文字の上で消すと、OS が開くディレクトリと
   別のロックになるためです。親ディレクトリは `resolve` で OS と同じ順にたどります。
   テスト: `test_dot_dot_after_a_symlink_locks_the_directory_the_os_opens`
+- path の途中にある symlink（`current/qlib` の `current`）も、`publish` で向き先が替わると読む build が替わります。
+  そこで途中の symlink の名前のロックも共有で取ります。止めたいのは張り替えだけなので、読み手でも書き手でも
+  共有です。排他にすると、同じ symlink の下の別のディレクトリを書く 2 つの writer まで互いを止めます。
+  書き込めないディレクトリの symlink（macOS の `/var` など）は飛ばします。`publish` は symlink の隣に新しい
+  リンクを作って rename するので、そこは張り替えられないためです。名前: `_symlinked_ancestor_locks`。
+  テスト: `test_publish_cannot_move_a_symlink_above_a_provider_a_reader_holds`
 - ロックは `flock` なので同じホストの中でしか効きません。分散実行で別のホストが同じ provider を書くことは
   このロックでは防げず、書くホストを 1 台に限る運用で防ぎます。
 - 表の値はコマンドが取るロックの列（path と排他か共有か）です。`publish` は公開先を排他、公開する build を共有で

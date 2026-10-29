@@ -265,6 +265,8 @@ build を書いている最中の `convert` / `run-all` があれば `publish` �
   公開名 `./data/qlib_jp` で copy する読み手と、`storage.qlib_dir` に build の実 path を書いた writer も、
   これで互いに排他になります。ロックファイルは path の順に取ります。全部を取った後に symlink の先を確かめ直し、
   その間に `publish` が向き先を替えていれば取り直します。
+- path の途中に symlink があるとき（`current/qlib` の `current` など）は、その symlink のロックも共有で取ります。
+  provider を読み書きしている間は、`publish` がその symlink を張り替えられず exit 75 で止まります。
 - ロックは同じマシンの中でしか効きません（`flock`）。別のホストのプロセスや、ネットワーク共有・Dropbox の
   同期越しの書き込みは止められません。provider を書くのは 1 台のホストに限ってください。
 - 別のプロセスがロックを持っていれば待たずに exit 75 で止まり、provider は変わりません。
