@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import enum
 import fcntl
-import os
 from collections.abc import Iterable, Iterator
 from contextlib import AbstractContextManager, ExitStack, contextmanager
 from pathlib import Path
@@ -34,23 +33,12 @@ def provider_lock_paths(provider: Path) -> tuple[Path, ...]:
     is not a symlink, both are the same file. Both are outside the provider tree, so a copy of the tree never
     contains them. A ``..`` is followed the way the OS follows it, after the symlink before it.
     """
-    absolute = _absolute(provider)
+    absolute = provider.expanduser().absolute()
+    if absolute.name == "..":
+        absolute = absolute.resolve()
     name_lock = _lock_file_beside(absolute)
     tree_lock = _lock_file_beside(absolute.resolve())
     return (name_lock,) if tree_lock == name_lock else (name_lock, tree_lock)
-
-
-def _absolute(provider: Path) -> Path:
-    absolute = provider.expanduser().absolute()
-    return absolute.resolve() if absolute.name == ".." else absolute
-
-
-def _symlinked_ancestor_locks(provider: Path) -> list[Path]:
-    return [
-        _lock_file_beside(ancestor)
-        for ancestor in reversed(_absolute(provider).parents)
-        if ancestor.is_symlink() and os.access(ancestor.parent.resolve(), os.W_OK)
-    ]
 
 
 def _flock(lock_path: Path, mode: LockMode, provider: Path, stack: ExitStack) -> None:
@@ -72,11 +60,6 @@ def provider_locks(requests: Iterable[tuple[Path, LockMode]]) -> Iterator[None]:
 
     A lock file requested in both modes is taken exclusive. Lock files are taken in sorted path order. Raises
     ``ProviderLockedError`` at once on the first lock another process holds, and releases the ones already taken.
-
-    A symlink above a provider is locked shared whatever the mode, so ``publish`` cannot point it at another build
-    while the provider is in use, and two writers below one symlink do not exclude each other. A symlink in a
-    directory this process cannot write, such as ``/var`` on macOS, is skipped: ``publish`` swaps a symlink by
-    renaming a new one beside it, so it cannot swap that one either.
 
     A symlink can be pointed at another build between resolving it and locking it. So once every lock is held, the
     lock files are resolved again, and on a change all are released and taken again. While the name lock is held,
@@ -104,12 +87,10 @@ _RESOLVE_ATTEMPTS = 3
 def _lock_files_of(requests: tuple[tuple[Path, LockMode], ...]) -> dict[Path, tuple[LockMode, Path]]:
     wanted: dict[Path, tuple[LockMode, Path]] = {}
     for provider, mode in requests:
-        locks = [(lock_path, mode) for lock_path in provider_lock_paths(provider)]
-        locks += [(lock_path, LockMode.SHARED) for lock_path in _symlinked_ancestor_locks(provider)]
-        for lock_path, lock_mode in locks:
+        for lock_path in provider_lock_paths(provider):
             held = wanted.get(lock_path)
-            if held is None or lock_mode > held[0]:
-                wanted[lock_path] = (lock_mode, provider)
+            if held is None or mode > held[0]:
+                wanted[lock_path] = (mode, provider)
     return wanted
 
 

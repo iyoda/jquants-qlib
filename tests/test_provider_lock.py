@@ -250,20 +250,6 @@ class ProviderLockPathTests(unittest.TestCase):
             with self.assertRaises(ProviderLockedError), provider_write_lock(second_build):
                 self.fail("a writer took the build the reader opens through the swapped symlink")
 
-    def test_publish_cannot_move_a_symlink_above_a_provider_a_reader_holds(self):
-        first_build, second_build = self.root / "builds" / "first", self.root / "builds" / "second"
-        (first_build / "qlib").mkdir(parents=True)
-        (second_build / "qlib").mkdir(parents=True)
-        published = self.root / "current"
-        published.symlink_to(first_build, target_is_directory=True)
-        publish = ("publish", "--build-provider-uri", str(second_build), "--provider-uri", str(published))
-        with provider_read_lock(published / "qlib"):
-            result = run_jqqlib(*publish)
-            self.assertEqual(result.returncode, PROVIDER_LOCKED_EXIT_CODE, result.stderr)
-            self.assertEqual(published.resolve(), first_build.resolve())
-        with provider_write_lock(first_build / "qlib"), provider_write_lock(published / "parquet"):
-            pass
-
     def test_dot_dot_after_a_symlink_locks_the_directory_the_os_opens(self):
         real_provider = self.root / "real" / "qlib"
         real_provider.mkdir(parents=True)
