@@ -21,6 +21,8 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
   shared, so two configs with different `qlib_dir` cannot write the same Parquet at once.
 - After taking every lock, the lock files are resolved again and taken again if `publish` moved a
   symlink in between. A `..` after a symlink locks the directory the OS opens. The lock is host-local.
+  The symlink `publish` swaps must be the last component of the provider path, not a symlink above
+  it or in a chain of symlinks.
 
 ## [0.4.0] - 2026-10-26
 

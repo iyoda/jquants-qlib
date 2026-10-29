@@ -156,6 +156,10 @@ dump の subtree 置き換えと manifest・quality report の書き込みは別
   テスト: `test_dot_dot_after_a_symlink_locks_the_directory_the_os_opens`
 - ロックは `flock` なので同じホストの中でしか効きません。分散実行で別のホストが同じ provider を書くことは
   このロックでは防げず、書くホストを 1 台に限る運用で防ぎます。
+- `publish` が張り替える symlink は、provider の path の最後の 1 段だけを想定します。path の途中の symlink、
+  symlink を指す symlink、読み手と publisher が別ユーザーの構成は守りません。どれも日次の取り込みでは起きず、
+  守るには OS と同じ順に path を 1 段ずつたどってすべての symlink をロックする必要があり、まれな構成のために
+  ロックが複雑になるためです。
 - 表の値はコマンドが取るロックの列（path と排他か共有か）です。`publish` は公開先を排他、公開する build を共有で
   取ります。build を読む側として扱うので、同じ build の `publish` どうしは重なれて、build を書いている writer
   とだけ排他になります。名前: `_publish_target_and_build`。

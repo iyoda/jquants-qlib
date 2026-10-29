@@ -267,6 +267,9 @@ build を書いている最中の `convert` / `run-all` があれば `publish` �
   その間に `publish` が向き先を替えていれば取り直します。
 - ロックは同じマシンの中でしか効きません（`flock`）。別のホストのプロセスや、ネットワーク共有・Dropbox の
   同期越しの書き込みは止められません。provider を書くのは 1 台のホストに限ってください。
+- `publish` で張り替える symlink は provider の path の最後の 1 段（`./data/qlib_jp` そのもの）にしてください。
+  path の途中の symlink（`current/qlib` の `current`）や、symlink を指す symlink を張り替えると、ロック中の
+  読み手の下で build が替わります。provider を読み書きするプロセスと `publish` は同じユーザーで動かしてください。
 - 別のプロセスがロックを持っていれば待たずに exit 75 で止まり、provider は変わりません。
   `run-daily --result-json` では `outcome: failed`、`exit_code: 75` です。
 - `validate`、`audit`、`publish-check`、`publish-paths`、`ledger`、`download-csv`、`init-config` は
