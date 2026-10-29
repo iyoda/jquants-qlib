@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
+import io
 import json
 import subprocess
 import sys
@@ -15,7 +16,7 @@ from unittest import mock
 import jsonschema
 
 from jqqlib.contracts import load_schema
-from jqqlib.pipeline import _PROVIDER_WRITTEN_BY_COMMAND, build_parser, run_bootstrap_csv
+from jqqlib.pipeline import _PROVIDER_WRITTEN_BY_COMMAND, build_parser, main, run_bootstrap_csv
 from jqqlib.provider_lock import ProviderLockedError, provider_lock_paths, provider_read_lock, provider_write_lock
 from tests.support.synthetic import write_synthetic_daily_quotes_csv
 
@@ -52,6 +53,21 @@ def run_jqqlib(*args: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, "-m", "jqqlib", *args], capture_output=True, text=True, check=False, timeout=120,
     )
+
+
+def run_jqqlib_in_this_process(*args: str) -> subprocess.CompletedProcess[str]:
+    stdout, stderr = io.StringIO(), io.StringIO()
+    returncode: int | str | None = 0
+    with (
+        mock.patch("sys.argv", ["jqqlib", *args]),
+        contextlib.redirect_stdout(stdout),
+        contextlib.redirect_stderr(stderr),
+    ):
+        try:
+            main()
+        except SystemExit as exc:
+            returncode = exc.code
+    return subprocess.CompletedProcess(["jqqlib", *args], returncode, stdout.getvalue(), stderr.getvalue())
 
 
 def tree_bytes(*roots: Path) -> dict[str, bytes]:
@@ -123,7 +139,7 @@ class ProviderLockCliTests(unittest.TestCase):
     def test_writer_command_runs_once_the_other_process_releases_the_lock(self):
         with lock_held_by_another_process("write", self.qlib_dir):
             self.assertEqual(run_jqqlib("convert", "--config", self.config).returncode, PROVIDER_LOCKED_EXIT_CODE)
-        convert = run_jqqlib("convert", "--config", self.config)
+        convert = run_jqqlib_in_this_process("convert", "--config", self.config)
         self.assertEqual(convert.returncode, 0, convert.stderr)
 
     def test_reader_lock_keeps_writer_commands_out_of_the_provider(self):
@@ -146,14 +162,14 @@ class ProviderLockCliTests(unittest.TestCase):
                 self.fail("a reader took the lock while a writer held it")
 
     def test_read_only_commands_run_while_a_writer_holds_the_lock(self):
-        ledger = run_jqqlib("ledger", "init", "--config", self.config)
+        ledger = run_jqqlib_in_this_process("ledger", "init", "--config", self.config)
         self.assertEqual(ledger.returncode, 0, ledger.stderr)
         with lock_held_by_another_process("write", self.qlib_dir):
-            validate = run_jqqlib("validate", "--config", self.config)
+            validate = run_jqqlib_in_this_process("validate", "--config", self.config)
             self.assertEqual(validate.returncode, 0, validate.stderr)
-            publish_check = run_jqqlib("publish-check", "--config", self.config)
+            publish_check = run_jqqlib_in_this_process("publish-check", "--config", self.config)
             self.assertEqual(publish_check.returncode, 0, publish_check.stderr)
-            publish_paths = run_jqqlib("publish-paths", "--config", self.config)
+            publish_paths = run_jqqlib_in_this_process("publish-paths", "--config", self.config)
             self.assertEqual(publish_paths.returncode, 0, publish_paths.stderr)
             self.assertIn(str(self.qlib_dir / "dataset_manifest.json"), publish_paths.stdout.splitlines())
 
@@ -214,7 +230,7 @@ class ProviderLockCliTests(unittest.TestCase):
                     self.assertEqual(self.provider_bytes(), before)
 
     def test_lock_file_sits_beside_the_provider_so_a_copy_of_the_tree_never_contains_it(self):
-        convert = run_jqqlib("convert", "--config", self.config)
+        convert = run_jqqlib_in_this_process("convert", "--config", self.config)
         self.assertEqual(convert.returncode, 0, convert.stderr)
         self.assertEqual(provider_lock_paths(self.qlib_dir), (self.qlib_dir.parent.resolve() / ".qlib.write.lock",))
         self.assertTrue(provider_lock_paths(self.qlib_dir)[0].is_file())
