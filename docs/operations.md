@@ -245,6 +245,41 @@ jqqlib publish --build-provider-uri ./data/builds/<dataset_id>/qlib_jp --provide
 build ディレクトリが無い場合や公開先が実ディレクトリの場合は `error: <message>` と exit 2 で
 止まります。
 
+### 4.5) Provider の書き込みロック
+
+provider を書くコマンド（`convert`、`bootstrap-csv`、`run-all`、`run-daily`、`publish`）と、provider の元になる
+Parquet を書く `run-etl` は、コマンドの最初から最後まで provider の排他ロックを持ちます。`run-etl` を含めるのは、
+`convert` が Parquet を dump と manifest で二度読むので、その間に Parquet が替わると manifest の
+`lineage.parquet_sha256` と bins が食い違うからです。`features` / `calendars` / `instruments` の置き換えと
+manifest・quality report の書き込みは、同じロックの中で行います。ロックの対象は `storage.qlib_dir` と
+`storage.parquet_dir` です。Parquet を書くコマンドは両方を排他で、Parquet を読むだけの `convert` は
+`storage.parquet_dir` を共有で取ります。`qlib_dir` の違う 2 つの設定が同じ `parquet_dir` を指していても、
+Parquet を同時に書くことはありません。
+`publish` は公開先 `--provider-uri` の排他ロックに加えて、公開する `--build-provider-uri` の共有ロックを取ります。
+build を書いている最中の `convert` / `run-all` があれば `publish` は exit 75 で止まり、書きかけの build は
+公開されません。同じ build の `publish` や copy どうしは重なれます。
+
+- ロックファイルは provider の隣の `.<名前>.write.lock` です（`./data/qlib_jp` なら `./data/.qlib_jp.write.lock`）。
+  provider の中には置かないので、provider を丸ごと copy しても入りません。ファイルは消さずに残します。
+- provider が symlink のときは、名前のロックに加えて、symlink の先の実体の隣のロックも取ります。
+  公開名 `./data/qlib_jp` で copy する読み手と、`storage.qlib_dir` に build の実 path を書いた writer も、
+  これで互いに排他になります。ロックファイルは path の順に取ります。全部を取った後に symlink の先を確かめ直し、
+  その間に `publish` が向き先を替えていれば取り直します。
+- ロックは同じマシンの中でしか効きません（`flock`）。別のホストのプロセスや、ネットワーク共有・Dropbox の
+  同期越しの書き込みは止められません。provider を書くのは 1 台のホストに限ってください。
+- `publish` で張り替える symlink は provider の path の最後の 1 段（`./data/qlib_jp` そのもの）にしてください。
+  path の途中の symlink（`current/qlib` の `current`）や、symlink を指す symlink を張り替えると、ロック中の
+  読み手の下で build が替わります。provider を読み書きするプロセスと `publish` は同じユーザーで動かしてください。
+- 別のプロセスがロックを持っていれば待たずに exit 75 で止まり、provider は変わりません。
+  `run-daily --result-json` では `outcome: failed`、`exit_code: 75` です。
+- `validate`、`audit`、`publish-check`、`publish-paths`、`ledger`、`download-csv`、`init-config` は
+  provider を書かないのでロックを取らず、ロック中でも動きます。
+- provider を copy する側は `jqqlib.provider_lock.provider_read_lock(<provider>)` の中で copy します。読み手どうしは
+  同時に持てます。持っている間は書き込みコマンドが exit 75 で止まります。書き込みコマンドが動いている間は、
+  `provider_read_lock` が `ProviderLockedError` を出します。
+- `jqqlib.dump.parquet_to_qlib` などをライブラリとして直接呼ぶ場合、ロックは自動では取られません。
+  呼ぶ側で `jqqlib.provider_lock.provider_write_lock(<provider>)` の中で呼んでください。
+
 ### 5) Dataset artifacts
 
 `storage.qlib_dir` に `dataset_manifest.json` と `dataset_quality_report.json` を出します。
@@ -375,6 +410,7 @@ Parquet と Qlib dataset は同じ入力から決定的に再生成できます
 | 1 | 検査で問題を検出（`validate` の品質エラー、`audit` の欠損、`publish-check` の manifest 異常や git 参照・台帳の失敗、`ledger append` が dataset を拒否・台帳が無いか壊れている）、dataset 状態の異常（Qlib-ready でないデータ、Qlib dump が provider subtree を作らなかった、Parquet が読めない）、または実行時の失敗（J-Quants API・通信エラー、lookback 内にデータが無い、財務データが取得できない） | `validate` / `audit` / `publish-check` / `ledger` ほか取得・変換系コマンド |
 | 2 | ユーザー側の誤り（設定ファイルが無い・必須キー不足・値が不正・`init-config` の上書き拒否・`publish` の build ディレクトリ不在／実ディレクトリの置換拒否、API キーが拒否された HTTP 401/403）。それ以外の API・通信エラーは含みません。`error: <message>` を stderr に出し traceback は出しません。`run-daily` / `audit` の XTKS カレンダー不可（`... XTKS trading calendar unavailable: ...`、監査未実施）も exit 2 | 全コマンド |
 | 3 | `publish-check` で変更なし（失敗ではない） | `publish-check` |
+| 75 | 別のプロセスが provider のロックを持っている。待たずに止まり、provider には何も書きません。そのプロセスが終わってから再実行してください | `convert` / `bootstrap-csv` / `run-all` / `run-daily` / `publish` |
 
 argparse の引数エラー（未知のコマンド、`--config` 欠落など）も exit 2 ですが、こちらは
 argparse の usage メッセージが出ます。
@@ -394,7 +430,7 @@ exit 2 はカレンダー不可と設定の誤りで共通、`audit` の exit 1 
 | `completed` | 成功 | 0 |
 | `gaps` | `audit` が欠損を検出（`audit` だけが出す） | 1 |
 | `calendar_unavailable` | XTKS カレンダー不可（監査未実施） | 2 |
-| `failed` | `error: <message>` で終わった失敗。`error` に同じ文言が入る | 1 または 2 |
+| `failed` | `error: <message>` で終わった失敗。`error` に同じ文言が入る | 1、2 または 75（provider のロック中） |
 
 - `exit_code` は実際の終了コードと同じです。`error` は `failed` のときだけ文字列で、それ以外は `null` です。
   上の表の `outcome` と `command`・`exit_code`・`error` の組み合わせは schema が検査します。

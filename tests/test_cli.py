@@ -313,9 +313,12 @@ class PipelineCliLoggingTests(unittest.TestCase):
                 dataset_end_reader=lambda _: dt.date(2026, 6, 2),
             )
 
+        tmp = self.enterContext(tempfile.TemporaryDirectory())
+        config_path = Path(tmp) / "config.yaml"
+        config_path.write_text(f"storage:\n  parquet_dir: {tmp}/parquet\n  qlib_dir: {tmp}/qlib\n", encoding="utf-8")
         stdout, stderr = io.StringIO(), io.StringIO()
         with (
-            patch("sys.argv", ["jqqlib", "run-daily", "--config", "config.yaml", "--as-of", "2026-06-05"]),
+            patch("sys.argv", ["jqqlib", "run-daily", "--config", str(config_path), "--as-of", "2026-06-05"]),
             patch("jqqlib.pipeline.run_daily", side_effect=wrapped_run_daily),
             contextlib.redirect_stdout(stdout),
             contextlib.redirect_stderr(stderr),
