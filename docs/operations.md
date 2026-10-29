@@ -251,7 +251,10 @@ provider を書くコマンド（`convert`、`bootstrap-csv`、`run-all`、`run-
 Parquet を書く `run-etl` は、コマンドの最初から最後まで provider の排他ロックを持ちます。`run-etl` を含めるのは、
 `convert` が Parquet を dump と manifest で二度読むので、その間に Parquet が替わると manifest の
 `lineage.parquet_sha256` と bins が食い違うからです。`features` / `calendars` / `instruments` の置き換えと
-manifest・quality report の書き込みは、同じロックの中で行います。ロックの対象は `storage.qlib_dir` です。
+manifest・quality report の書き込みは、同じロックの中で行います。ロックの対象は `storage.qlib_dir` と
+`storage.parquet_dir` です。Parquet を書くコマンドは両方を排他で、Parquet を読むだけの `convert` は
+`storage.parquet_dir` を共有で取ります。`qlib_dir` の違う 2 つの設定が同じ `parquet_dir` を指していても、
+Parquet を同時に書くことはありません。
 `publish` は公開先 `--provider-uri` の排他ロックに加えて、公開する `--build-provider-uri` の共有ロックを取ります。
 build を書いている最中の `convert` / `run-all` があれば `publish` は exit 75 で止まり、書きかけの build は
 公開されません。同じ build の `publish` や copy どうしは重なれます。
@@ -260,7 +263,10 @@ build を書いている最中の `convert` / `run-all` があれば `publish` �
   provider の中には置かないので、provider を丸ごと copy しても入りません。ファイルは消さずに残します。
 - provider が symlink のときは、名前のロックに加えて、symlink の先の実体の隣のロックも取ります。
   公開名 `./data/qlib_jp` で copy する読み手と、`storage.qlib_dir` に build の実 path を書いた writer も、
-  これで互いに排他になります。ロックファイルは path の順に取ります。
+  これで互いに排他になります。ロックファイルは path の順に取ります。全部を取った後に symlink の先を確かめ直し、
+  その間に `publish` が向き先を替えていれば取り直します。
+- ロックは同じマシンの中でしか効きません（`flock`）。別のホストのプロセスや、ネットワーク共有・Dropbox の
+  同期越しの書き込みは止められません。provider を書くのは 1 台のホストに限ってください。
 - 別のプロセスがロックを持っていれば待たずに exit 75 で止まり、provider は変わりません。
   `run-daily --result-json` では `outcome: failed`、`exit_code: 75` です。
 - `validate`、`audit`、`publish-check`、`publish-paths`、`ledger`、`download-csv`、`init-config` は

@@ -442,9 +442,11 @@ class ResultJsonTests(unittest.TestCase):
             )
             self.assertEqual(code, 1)
             self.assertEqual(stderr, "error: No data fetched for any day\n")
-            locks_beside_the_provider = [path.name for path in provider_lock_paths(Path(tmp) / "qlib")]
+            locks_beside_the_storage = [
+                path.name for storage in ("qlib", "parquet") for path in provider_lock_paths(Path(tmp) / storage)
+            ]
             self.assertEqual(
-                sorted(path.name for path in Path(tmp).iterdir()), sorted([*locks_beside_the_provider, "settings.yaml"])
+                sorted(path.name for path in Path(tmp).iterdir()), sorted([*locks_beside_the_storage, "settings.yaml"])
             )
 
     def test_unwritable_result_path_warns_and_keeps_the_original_exit_code(self) -> None:

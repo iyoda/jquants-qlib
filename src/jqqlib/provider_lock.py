@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import enum
 import fcntl
-import os
 from collections.abc import Iterable, Iterator
 from contextlib import AbstractContextManager, ExitStack, contextmanager
 from pathlib import Path
@@ -32,9 +31,11 @@ def provider_lock_paths(provider: Path) -> tuple[Path, ...]:
     component, so a provider symlink keeps one lock while ``publish`` points it at another build. The tree lock
     resolves it, so a symlink name and the real build path it points at still exclude each other. When the provider
     is not a symlink, both are the same file. Both are outside the provider tree, so a copy of the tree never
-    contains them.
+    contains them. A ``..`` is followed the way the OS follows it, after the symlink before it.
     """
-    absolute = Path(os.path.abspath(provider.expanduser()))
+    absolute = provider.expanduser().absolute()
+    if absolute.name == "..":
+        absolute = absolute.resolve()
     name_lock = _lock_file_beside(absolute)
     tree_lock = _lock_file_beside(absolute.resolve())
     return (name_lock,) if tree_lock == name_lock else (name_lock, tree_lock)
@@ -59,18 +60,38 @@ def provider_locks(requests: Iterable[tuple[Path, LockMode]]) -> Iterator[None]:
 
     A lock file requested in both modes is taken exclusive. Lock files are taken in sorted path order. Raises
     ``ProviderLockedError`` at once on the first lock another process holds, and releases the ones already taken.
+
+    A symlink can be pointed at another build between resolving it and locking it. So once every lock is held, the
+    lock files are resolved again, and on a change all are released and taken again. While the name lock is held,
+    ``publish`` cannot point the symlink anywhere else.
     """
+    requested = tuple(requests)
+    for _ in range(_RESOLVE_ATTEMPTS):
+        wanted = _lock_files_of(requested)
+        with ExitStack() as stack:
+            for lock_path in sorted(wanted):
+                mode, provider = wanted[lock_path]
+                _flock(lock_path, mode, provider, stack)
+            if _lock_files_of(requested) == wanted:
+                yield
+                return
+    raise ProviderLockedError(
+        f"Qlib providers {[str(provider) for provider, _ in requested]} kept resolving to another build while "
+        "being locked; not waiting. Run again after the publish that moves them ends."
+    )
+
+
+_RESOLVE_ATTEMPTS = 3
+
+
+def _lock_files_of(requests: tuple[tuple[Path, LockMode], ...]) -> dict[Path, tuple[LockMode, Path]]:
     wanted: dict[Path, tuple[LockMode, Path]] = {}
     for provider, mode in requests:
         for lock_path in provider_lock_paths(provider):
             held = wanted.get(lock_path)
             if held is None or mode > held[0]:
                 wanted[lock_path] = (mode, provider)
-    with ExitStack() as stack:
-        for lock_path in sorted(wanted):
-            mode, provider = wanted[lock_path]
-            _flock(lock_path, mode, provider, stack)
-        yield
+    return wanted
 
 
 def provider_write_lock(provider: Path) -> AbstractContextManager[None]:

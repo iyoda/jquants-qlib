@@ -1097,8 +1097,15 @@ def _write_cli_result(path: Path, command: str, outcome: str, exit_code: int, er
 _ProviderLockRequests = tuple[tuple[Path, LockMode], ...]
 
 
-def _configured_qlib_dir(args: argparse.Namespace) -> _ProviderLockRequests:
-    return ((Path(load_config(Path(args.config))["storage"]["qlib_dir"]), LockMode.EXCLUSIVE),)
+def _configured_storage(parquet_mode: LockMode) -> Callable[[argparse.Namespace], _ProviderLockRequests]:
+    def requests(args: argparse.Namespace) -> _ProviderLockRequests:
+        storage = load_config(Path(args.config))["storage"]
+        return ((Path(storage["qlib_dir"]), LockMode.EXCLUSIVE), (Path(storage["parquet_dir"]), parquet_mode))
+
+    return requests
+
+
+_writes_the_parquet_and_qlib_dir = _configured_storage(LockMode.EXCLUSIVE)
 
 
 def _publish_target_and_build(args: argparse.Namespace) -> _ProviderLockRequests:
@@ -1110,13 +1117,13 @@ def _publish_target_and_build(args: argparse.Namespace) -> _ProviderLockRequests
 
 _PROVIDER_WRITTEN_BY_COMMAND: dict[str, Callable[[argparse.Namespace], _ProviderLockRequests] | None] = {
     "init-config": None,
-    "run-etl": _configured_qlib_dir,
-    "convert": _configured_qlib_dir,
+    "run-etl": _writes_the_parquet_and_qlib_dir,
+    "convert": _configured_storage(LockMode.SHARED),
     "validate": None,
-    "bootstrap-csv": _configured_qlib_dir,
+    "bootstrap-csv": _writes_the_parquet_and_qlib_dir,
     "download-csv": None,
-    "run-all": _configured_qlib_dir,
-    "run-daily": _configured_qlib_dir,
+    "run-all": _writes_the_parquet_and_qlib_dir,
+    "run-daily": _writes_the_parquet_and_qlib_dir,
     "audit": None,
     "publish-check": None,
     "ledger": None,

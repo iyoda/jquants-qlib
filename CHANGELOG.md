@@ -17,6 +17,10 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
   that a writer is still writing.
 - A provider that is a symlink is locked both by its name and by the tree it resolves to, so a
   reader and a writer that use different paths for the same tree still exclude each other.
+- Commands that write the Parquet also lock `storage.parquet_dir` exclusively, and `convert` locks it
+  shared, so two configs with different `qlib_dir` cannot write the same Parquet at once.
+- After taking every lock, the lock files are resolved again and taken again if `publish` moved a
+  symlink in between. A `..` after a symlink locks the directory the OS opens. The lock is host-local.
 
 ## [0.4.0] - 2026-10-26
 

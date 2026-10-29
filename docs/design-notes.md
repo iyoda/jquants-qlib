@@ -125,6 +125,11 @@ dump の subtree 置き換えと manifest・quality report の書き込みは別
   テスト: `test_every_subcommand_declares_whether_it_writes_a_provider`
 - `run-etl` は provider を書きませんが表ではロックを取ります。`convert` は Parquet を dump と manifest で二度読むので、
   その間に `run-etl` が Parquet を替えると manifest の `lineage.parquet_sha256` と bins が食い違うためです。
+  Parquet そのものも `storage.parquet_dir` のロックで守ります。`qlib_dir` の違う 2 つの設定が同じ Parquet を
+  書くことがあるためです。書くコマンドは排他、読むだけの `convert` は共有です。`run-etl` が `qlib_dir` の
+  ロックも取り続けるのは、`qlib_dir` だけをロックして Parquet を置き換える呼び出し側を締め出すためです。
+  名前: `_configured_storage`。
+  テスト: `test_commands_that_touch_the_parquet_fail_fast_while_another_process_writes_it`
 - 待たずに失敗させます（exit 75、sysexits の EX_TEMPFAIL と同じ値）。日次の取り込みが手動の実行や copy の後ろで黙って
   待つと、遅れの原因が見えなくなるためです。exit 1・2 と分けるのは、再実行すれば通る失敗だからです。
   名前: `ProviderLockedError`、`_PROVIDER_LOCKED_EXIT_CODE`。
@@ -140,6 +145,17 @@ dump の subtree 置き換えと manifest・quality report の書き込みは別
   2 つは同じファイルなので 1 つだけ取ります。待たずに失敗させるので順序で deadlock は起きませんが、同時に
   始めた 2 つがどちらも途中で引き返すことを減らすため、path の順に取ります。
   名前: `provider_locks`、`LockMode`。テスト: `test_a_symlink_name_and_the_build_it_points_at_exclude_each_other`
+- symlink の先は、解決してからロックを取るまでの間に `publish` で替わりえます。そのままだと、古い build の
+  ロックを持ったまま新しい build を読み、新しい build の writer と重なります。そこで全部を取った後にロックファイルを
+  解決し直し、違えば全部を放して取り直します。名前のロックを持っている間は `publish` が排他を取れないので、
+  確かめた後に向き先は変わりません。3 回続けて替わったら待たずに `ProviderLockedError` にします。
+  名前: `_RESOLVE_ATTEMPTS`。
+  テスト: `test_a_reader_holds_the_build_the_symlink_points_at_after_publish_swaps_it_mid_lock`
+- path は `os.path.abspath` で正規化しません。`link/../qlib` の `..` を文字の上で消すと、OS が開くディレクトリと
+  別のロックになるためです。親ディレクトリは `resolve` で OS と同じ順にたどります。
+  テスト: `test_dot_dot_after_a_symlink_locks_the_directory_the_os_opens`
+- ロックは `flock` なので同じホストの中でしか効きません。分散実行で別のホストが同じ provider を書くことは
+  このロックでは防げず、書くホストを 1 台に限る運用で防ぎます。
 - 表の値はコマンドが取るロックの列（path と排他か共有か）です。`publish` は公開先を排他、公開する build を共有で
   取ります。build を読む側として扱うので、同じ build の `publish` どうしは重なれて、build を書いている writer
   とだけ排他になります。名前: `_publish_target_and_build`。

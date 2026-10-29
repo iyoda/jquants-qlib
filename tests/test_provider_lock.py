@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import fcntl
 import json
 import subprocess
 import sys
@@ -9,6 +10,7 @@ import tempfile
 import unittest
 from collections.abc import Iterator
 from pathlib import Path
+from unittest import mock
 
 import jsonschema
 
@@ -198,12 +200,66 @@ class ProviderLockCliTests(unittest.TestCase):
             with self.assertRaises(ProviderLockedError), provider_read_lock(published_name):
                 self.fail("a reader took the lock through a symlink while a writer held the real build")
 
+    def test_commands_that_touch_the_parquet_fail_fast_while_another_process_writes_it(self):
+        commands = {
+            "run-etl": ("run-etl", "--config", self.config, "--start", "2026-06-08", "--end", "2026-06-08"),
+            "convert": ("convert", "--config", self.config),
+            "bootstrap-csv": ("bootstrap-csv", "--config", self.config, "--csv", str(self.csv_path)),
+        }
+        before = self.provider_bytes()
+        with lock_held_by_another_process("write", self.parquet_dir):
+            for name, command in commands.items():
+                with self.subTest(command=name):
+                    self.assert_refused_as_locked(run_jqqlib(*command), self.parquet_dir)
+                    self.assertEqual(self.provider_bytes(), before)
+
     def test_lock_file_sits_beside_the_provider_so_a_copy_of_the_tree_never_contains_it(self):
         convert = run_jqqlib("convert", "--config", self.config)
         self.assertEqual(convert.returncode, 0, convert.stderr)
         self.assertEqual(provider_lock_paths(self.qlib_dir), (self.qlib_dir.parent.resolve() / ".qlib.write.lock",))
         self.assertTrue(provider_lock_paths(self.qlib_dir)[0].is_file())
         self.assertEqual([path for path in self.qlib_dir.rglob("*") if "lock" in path.name], [])
+
+
+class ProviderLockPathTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+
+    def test_a_reader_holds_the_build_the_symlink_points_at_after_publish_swaps_it_mid_lock(self):
+        first_build, second_build = self.root / "builds" / "first", self.root / "builds" / "second"
+        first_build.mkdir(parents=True)
+        second_build.mkdir()
+        provider = self.root / "current"
+        provider.symlink_to(first_build, target_is_directory=True)
+        real_flock = fcntl.flock
+        swapped = []
+
+        def publish_swaps_the_symlink_before_the_first_lock(fd: int, operation: int) -> None:
+            if not swapped:
+                swapped.append(True)
+                provider.unlink()
+                provider.symlink_to(second_build, target_is_directory=True)
+            real_flock(fd, operation)
+
+        with contextlib.ExitStack() as reading:
+            with mock.patch("fcntl.flock", side_effect=publish_swaps_the_symlink_before_the_first_lock):
+                reading.enter_context(provider_read_lock(provider))
+            self.assertEqual(swapped, [True])
+            with self.assertRaises(ProviderLockedError), provider_write_lock(second_build):
+                self.fail("a writer took the build the reader opens through the swapped symlink")
+
+    def test_dot_dot_after_a_symlink_locks_the_directory_the_os_opens(self):
+        real_provider = self.root / "real" / "qlib"
+        real_provider.mkdir(parents=True)
+        (self.root / "real" / "sub").mkdir()
+        (self.root / "link").symlink_to(self.root / "real" / "sub", target_is_directory=True)
+        spelled_through_the_link = self.root / "link" / ".." / "qlib"
+        self.assertEqual(spelled_through_the_link.resolve(), real_provider.resolve())
+        with provider_write_lock(real_provider):
+            with self.assertRaises(ProviderLockedError), provider_read_lock(spelled_through_the_link):
+                self.fail("a reader took the lock through '..' while a writer held the directory it opens")
 
 
 class ProviderWriterRegistryTests(unittest.TestCase):
