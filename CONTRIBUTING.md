@@ -36,11 +36,11 @@ When `CI` is set (for example `CI=1`), `tests/test_cli.py` fails instead of skip
 The project supports POSIX platforms only (macOS and Linux): dataset publishing relies on
 symlinks and the credential fallback uses the macOS Keychain. Windows is not a target.
 
-To reproduce the CI Python 3.10 leg locally with [uv](https://docs.astral.sh/uv/):
+To reproduce the CI Python 3.11 leg locally with [uv](https://docs.astral.sh/uv/):
 
 ```bash
-uv venv --python 3.10 /tmp/jqqlib-py310 && uv pip install --python /tmp/jqqlib-py310/bin/python -e ".[dev]"
-/tmp/jqqlib-py310/bin/python -m unittest discover -s tests
+uv venv --python 3.11 /tmp/jqqlib-py311 && uv pip install --python /tmp/jqqlib-py311/bin/python -e ".[dev]"
+/tmp/jqqlib-py311/bin/python -m unittest discover -s tests
 ```
 
 mypy checks all of `src/jqqlib`; `scripts/` and `tests/` are not yet type-checked. CI runs the same
