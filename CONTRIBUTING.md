@@ -80,6 +80,15 @@ coverage run -m unittest discover -s tests && coverage report
 - Load the packaged schemas with `jqqlib.contracts.load_schema`. `src/jqqlib/qlib_dump.py` is adapted from
   microsoft/qlib `scripts/dump_bin.py` (MIT); keep `THIRD_PARTY_NOTICES.md` in sync with it.
 - Add or update a unittest for every behaviour change. The suite is `unittest`, not pytest.
+- Place each test at the lowest layer that can catch its failure:
+  - Test each rule at the lowest layer that can observe it. A subprocess, make, or end-to-end test checks only
+    the wiring between processes: arguments, environment, exit codes, and stage order.
+  - When you add an upper-layer test, name the lower-layer test that covers its branches and the wiring that
+    only this test observes. If you cannot name that wiring, write the test lower.
+  - Parametrize a dimension only over tests whose code path it changes.
+  - Remove an upper-layer test only when a lower test covers its branches and another run covers its wiring.
+    Plant the regression and confirm a remaining test fails.
+  - Tests write only under their own temporary directories, so the suite can run in parallel processes.
 - Comments and docstrings follow [the rules below](#comments-and-docstrings).
 - Keep pull requests focused. Describe *why* in the PR body and link the issue if one exists.
 - Target the `dev` branch (the repository default). `master` only receives release merges from
