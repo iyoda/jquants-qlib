@@ -35,12 +35,37 @@ def version_mismatch(root: Path) -> list[str]:
     return [f"CITATION.cff version {citation_version} != pyproject.toml [project].version {project_version}"]
 
 
+def assigned_names(target: ast.expr) -> list[str]:
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, ast.Tuple | ast.List):
+        return [name for element in target.elts for name in assigned_names(element)]
+    if isinstance(target, ast.Starred):
+        return assigned_names(target.value)
+    return []
+
+
+def module_scope_statements(statements: list[ast.stmt]) -> Iterable[ast.stmt]:
+    for statement in statements:
+        yield statement
+        if not isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            for field in ("body", "orelse", "finalbody"):
+                yield from module_scope_statements(
+                    [child for child in getattr(statement, field, []) if isinstance(child, ast.stmt)]
+                )
+            for handler in getattr(statement, "handlers", []):
+                yield from module_scope_statements(handler.body)
+
+
 def declares_all(source: str) -> bool:
-    for node in ast.walk(ast.parse(source)):
-        targets = node.targets if isinstance(node, ast.Assign) else [getattr(node, "target", None)]
-        if isinstance(node, ast.Assign | ast.AnnAssign | ast.AugAssign) and any(
-            isinstance(target, ast.Name) and target.id == "__all__" for target in targets
-        ):
+    for statement in module_scope_statements(ast.parse(source).body):
+        if isinstance(statement, ast.Assign):
+            targets = statement.targets
+        elif isinstance(statement, ast.AnnAssign | ast.AugAssign):
+            targets = [statement.target]
+        else:
+            continue
+        if any("__all__" in assigned_names(target) for target in targets):
             return True
     return False
 
