@@ -51,6 +51,8 @@ jobs:
       - run: mypy
       - name: No comments outside tool directives, docstrings only on the public API
         run: python scripts/check_comments.py
+      - name: Version and __all__ conventions
+        run: python scripts/check_conventions.py
 
   dist:
     runs-on: ubuntu-latest

@@ -7,10 +7,15 @@ pre-commit:
     - name: comments-and-docstrings
       glob: "*.py"
       run: '"${JQQLIB_PYTHON:-.venv/bin/python}" scripts/check_comments.py {staged_files}'
+    - name: conventions
+      run: '"${JQQLIB_PYTHON:-.venv/bin/python}" scripts/check_conventions.py --staged'
 
 pre-push:
   parallel: true
   jobs:
+    - name: no-hand-pushed-tags
+      use_stdin: true
+      run: '"${JQQLIB_PYTHON:-.venv/bin/python}" scripts/check_conventions.py --pre-push'
     - name: mypy
       run: '"${JQQLIB_PYTHON:-.venv/bin/python}" -m mypy'
     - name: unittest
