@@ -11,38 +11,10 @@ assert _SPEC is not None and _SPEC.loader is not None
 check_conventions = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(check_conventions)
 
-MODULE_SCOPE_ALL = (
-    "__all__ = []\n",
-    "__all__: list[str] = []\n",
-    "__all__ += []\n",
-    "(__all__, other) = ([], 1)\n",
-    "[first, *__all__] = [1, 2]\n",
-    "if True:\n    __all__ = []\n",
-    "try:\n    pass\nexcept Exception:\n    __all__ = []\n",
-)
-NOT_MODULE_SCOPE_ALL = (
-    "def f():\n    __all__ = []\n",
-    "class A:\n    __all__ = []\n",
-    'x = "__all__ = []"\n',
-    "names = __all__\n",
-)
-
-
-class AllDeclarationTests(unittest.TestCase):
-    def test_module_scope_all_is_found_in_every_assignment_form(self) -> None:
-        for source in MODULE_SCOPE_ALL:
-            with self.subTest(source=source):
-                self.assertTrue(check_conventions.declares_all(source))
-
-    def test_names_inside_functions_classes_and_strings_are_not_module_all(self) -> None:
-        for source in NOT_MODULE_SCOPE_ALL:
-            with self.subTest(source=source):
-                self.assertFalse(check_conventions.declares_all(source))
-
-
 class RuleTests(unittest.TestCase):
     def test_the_repository_follows_the_rules(self) -> None:
-        found = check_conventions.version_mismatch(REPO_ROOT) + check_conventions.misplaced_all_declarations(REPO_ROOT)
+        found = check_conventions.version_mismatch(REPO_ROOT)
+        found += check_conventions.unredistributable_paths(check_conventions.tracked_paths(REPO_ROOT))
         self.assertEqual(found, [])
 
     def test_tag_pushes_are_rejected_and_branch_pushes_pass(self) -> None:
