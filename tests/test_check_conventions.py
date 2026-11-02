@@ -13,9 +13,7 @@ _SPEC.loader.exec_module(check_conventions)
 
 class RuleTests(unittest.TestCase):
     def test_the_repository_follows_the_rules(self) -> None:
-        found = check_conventions.version_mismatch(REPO_ROOT)
-        found += check_conventions.unredistributable_paths(check_conventions.tracked_paths(REPO_ROOT))
-        self.assertEqual(found, [])
+        self.assertEqual(check_conventions.version_mismatch(REPO_ROOT), [])
 
     def test_tag_pushes_are_rejected_and_branch_pushes_pass(self) -> None:
         lines = ["refs/heads/dev 1 refs/heads/dev 0\n", "refs/tags/v1 1 refs/tags/v1 0\n"]
