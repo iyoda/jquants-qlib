@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import ast
 import re
 import subprocess
 import sys
@@ -12,8 +11,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 UNREDISTRIBUTABLE_PREFIXES = ("data/", "downloads/")
 UNREDISTRIBUTABLE_FILES = ("config.yaml", ".envrc")
-ALL_DECLARATION_ALLOWED = Path("src/jqqlib/__init__.py")
-ALL_DECLARATION_ROOTS = (Path("src"), Path("scripts"))
 CITATION_VERSION = re.compile(r"^version:\s*['\"]?([^'\"\s]+)['\"]?\s*$", re.MULTILINE)
 TAG_REF_PREFIX = "refs/tags/"
 
@@ -35,51 +32,6 @@ def version_mismatch(root: Path) -> list[str]:
     return [f"CITATION.cff version {citation_version} != pyproject.toml [project].version {project_version}"]
 
 
-def assigned_names(target: ast.expr) -> list[str]:
-    if isinstance(target, ast.Name):
-        return [target.id]
-    if isinstance(target, ast.Tuple | ast.List):
-        return [name for element in target.elts for name in assigned_names(element)]
-    if isinstance(target, ast.Starred):
-        return assigned_names(target.value)
-    return []
-
-
-def module_scope_statements(statements: list[ast.stmt]) -> Iterable[ast.stmt]:
-    for statement in statements:
-        yield statement
-        if not isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
-            for field in ("body", "orelse", "finalbody"):
-                yield from module_scope_statements(
-                    [child for child in getattr(statement, field, []) if isinstance(child, ast.stmt)]
-                )
-            for handler in getattr(statement, "handlers", []):
-                yield from module_scope_statements(handler.body)
-
-
-def declares_all(source: str) -> bool:
-    for statement in module_scope_statements(ast.parse(source).body):
-        if isinstance(statement, ast.Assign):
-            targets = statement.targets
-        elif isinstance(statement, ast.AnnAssign | ast.AugAssign):
-            targets = [statement.target]
-        else:
-            continue
-        if any("__all__" in assigned_names(target) for target in targets):
-            return True
-    return False
-
-
-def misplaced_all_declarations(root: Path) -> list[str]:
-    found = []
-    for base in ALL_DECLARATION_ROOTS:
-        for path in sorted((root / base).rglob("*.py")):
-            relative = path.relative_to(root)
-            if relative != ALL_DECLARATION_ALLOWED and declares_all(path.read_text(encoding="utf-8")):
-                found.append(f"{relative}: declare __all__ only in {ALL_DECLARATION_ALLOWED} (ruff D1 relies on it)")
-    return found
-
-
 def pushed_tags(push_lines: Iterable[str]) -> list[str]:
     found = []
     for line in push_lines:
@@ -89,9 +41,17 @@ def pushed_tags(push_lines: Iterable[str]) -> list[str]:
     return found
 
 
+def tracked_paths(root: Path) -> list[str]:
+    return git_paths(root, "ls-files", "-z")
+
+
 def staged_paths(root: Path) -> list[str]:
+    return git_paths(root, "diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z")
+
+
+def git_paths(root: Path, *args: str) -> list[str]:
     result = subprocess.run(
-        ["git", "diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z"],
+        ["git", *args],
         cwd=root,
         check=True,
         capture_output=True,
@@ -103,15 +63,14 @@ def staged_paths(root: Path) -> list[str]:
 def main(argv: Sequence[str] | None = None, *, root: Path = REPO_ROOT) -> int:
     parser = argparse.ArgumentParser(description="Check the CONTRIBUTING.md ground rules that a machine can decide.")
     mode = parser.add_mutually_exclusive_group()
-    mode.add_argument("--staged", action="store_true", help="also reject staged market data and credentials")
+    mode.add_argument("--staged", action="store_true", help="check staged paths instead of tracked ones")
     mode.add_argument("--pre-push", action="store_true", help="read git pre-push stdin and reject tag pushes")
     args = parser.parse_args(argv)
     if args.pre_push:
         found = pushed_tags(sys.stdin)
     else:
-        found = version_mismatch(root) + misplaced_all_declarations(root)
-        if args.staged:
-            found += unredistributable_paths(staged_paths(root))
+        paths = staged_paths(root) if args.staged else tracked_paths(root)
+        found = version_mismatch(root) + unredistributable_paths(paths)
     for violation in found:
         print(violation, file=sys.stderr)
     return 1 if found else 0

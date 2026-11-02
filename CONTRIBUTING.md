@@ -63,7 +63,7 @@ coverage run -m unittest discover -s tests && coverage report
 - A rule a machine can decide is written as a check (`lefthook.yml` and the required CI job), and this file only
   points at it. `scripts/check_conventions.py` holds the ground-rule checks.
 - **Never commit market data or credentials.** `data/`, `downloads/`, `config.yaml` and `.envrc` are gitignored, and
-  the pre-commit hook rejects them even when force-added. The J-Quants terms of service do not allow redistributing the data.
+  the pre-commit hook and CI reject them even when force-added. The J-Quants terms of service do not allow redistributing the data.
 - Keep the pipeline deterministic: identical inputs must produce byte-identical Parquet and the same `lineage.parquet_sha256`.
 - Changes to `dataset_manifest.json` / `dataset_quality_report.json` must keep `src/jqqlib/contracts/*.schema.json` in sync with the code. `tests/test_contracts_package.py` checks the packaged schemas load, and `tests/test_manifest.py` validates a generated manifest against them; update both when the schema changes. Bump `schema_version` for breaking changes.
 - Parquet stays raw: it requires `adjustment_factor` (optional `ex_rights_type`) and never stores cumulative factors;
@@ -109,8 +109,7 @@ comments. Other file types there, such as `scripts/run_daily.sh`, are out of sco
 - Docstrings belong only to the public API of the typed package, and are required there: modules, classes,
   functions and methods in `src/jqqlib` whose own name and every enclosing module and class name do not start
   with `_` (dunder methods count as public). None on anything else: not in a `_`-prefixed module or class, not on
-  definitions inside functions, and not in `scripts/`. `__all__` lives only in `src/jqqlib/__init__.py`
-  (`scripts/check_conventions.py`), because ruff's `D1` would stop requiring docstrings on names left out of it.
+  definitions inside functions, and not in `scripts/`.
 - Background that neither a name nor a test can carry (why a design was chosen, what it avoids) goes in
   [docs/design-notes.md](docs/design-notes.md). `tests/test_design_notes.py` fails when a name, test, path or
   file name cited there no longer exists, so update the page in the same change as a rename.

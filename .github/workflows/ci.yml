@@ -51,7 +51,7 @@ jobs:
       - run: mypy
       - name: No comments outside tool directives, docstrings only on the public API
         run: python scripts/check_comments.py
-      - name: Version and __all__ conventions
+      - name: Version matches and no market data or credentials are tracked
         run: python scripts/check_conventions.py
 
   dist:
