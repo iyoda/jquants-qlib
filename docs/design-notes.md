@@ -378,8 +378,16 @@ API の履歴は、契約のプランによって、さかのぼれる範囲が�
 
 年末の一覧が要るのは年に 1 度で、株価は毎日要ります。一覧の取得の失敗で日次の更新を止めると、年に 1 度の
 情報のために毎日の更新を失います。`provider_listing` は、資格情報が無い場合も含めて、取得の失敗を例外に
-せず、警告と manifest の `listing.unavailable` に残します。失敗した日は保存されないので、次の実行で
-もう一度試されます。
+せず、警告と manifest の `listing.unavailable` に残します。保存した応答が読めない場合も同じです。保存され
+なかった日は、次の実行でもう一度試されます。
+
+provider への書き込みの失敗は、握りません。書けなかったファイルを manifest に載せるわけにいかず、provider に
+書けないなら manifest も書けないためです。その場合は、前の `listing/` を元に戻してから、例外を出します。
+`listing/` を置き換えた後、manifest を書く前に止まると、新しい `listing/` と古い manifest が残ります。
+読む側は、manifest に載っているファイルを、SHA-256 を確かめて使います。
+
+`publish-check` と台帳は、一覧を見ません。`dataset_id` と同じく、株価の Parquet で変更を判定します。一覧
+だけが変わった build の扱いは、運用の文書に書いた手順で決めます。
 
 失敗を黙って通さないために、manifest には、対象の日、作れたファイルとその SHA-256、作れなかった日と理由を
 書きます。読む側は、要る基準日のファイルが `listing.files` に無ければ、使わずに止まれます。`listing` は
@@ -394,7 +402,9 @@ manifest の SHA-256 の対象に入りますが、`dataset_id` には入れて�
 - テスト: `tests/test_listing_sync.py` の `test_disabled_requests_reads_and_writes_nothing`、
   `test_a_missing_credential_is_recorded_and_not_raised`、
   `test_one_failing_day_is_reported_and_does_not_stop_the_others`、
-  `test_a_file_that_is_no_longer_a_target_is_removed`
+  `test_a_file_that_is_no_longer_a_target_is_removed`、
+  `test_a_failed_replacement_puts_the_previous_subtree_back`、
+  `test_a_build_completes_when_a_stored_listing_cannot_be_read`
 
 ## スクリプト（`scripts/`）
 

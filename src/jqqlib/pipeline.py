@@ -174,7 +174,8 @@ def provider_listing(config: dict, qlib_dir: Path, *, fetch: bool) -> dict[str, 
     With ``listing.enabled`` false nothing is requested, read or written. Otherwise the year ends of the
     finished years in the provider calendar are the targets. ``fetch`` asks the API for the targets that
     have no stored response; a failure there, including a missing credential, is logged and recorded in
-    the block and never raised, so the price build it follows still completes.
+    the block and never raised, and so is a stored response that cannot be read, so the price build it
+    follows still completes. A failure to write under ``qlib_dir`` raises ``OSError``.
     """
     listing = listing_config(config)
     if not listing.enabled:

@@ -341,8 +341,14 @@ API を呼ばず、provider と manifest は今までと同じです。
 - `run-all` と `run-daily` は、保存していない対象の日を API から取り、`listing.raw_dir` に基準日ごとの
   1 ファイルとして保存します。保存した日は取り直しません。`convert` と `bootstrap-csv` は API を呼ばず、
   保存済みの応答から `listing/` を作ります。
-- 取得に失敗しても、株価の更新は止まりません。失敗は警告として出力し、manifest の `listing.unavailable` に
-  記録します。次の実行でもう一度試します。
+- 取得に失敗しても、保存した応答が読めなくても、株価の更新は止まりません。警告として出力し、manifest の
+  `listing.unavailable` に記録します。保存されなかった日は、次の実行でもう一度試します。provider への
+  書き込みに失敗した場合は別で、コマンドが失敗します。そのとき、前の `listing/` は元に戻します。
+- 保存していない対象の日 1 つにつき、API を 2 回呼びます。API の履歴の範囲より前の年は、毎回の実行で
+  失敗し続けるので、`listing.first_year` で外してください。
+- `publish-check` と台帳は、株価の Parquet が変わったかどうかだけを見ます。株価が同じで一覧だけが増えた
+  build（保存した応答を後から置いて `convert` した場合など）は、「変更なし」と判定されます。その build を
+  公開・バックアップするかどうかは、manifest の `listing.files` を見て、手で判断してください。
 - `listing/` は、provider を作るたびに全体を作り直します。manifest の `listing.files` が、そこにある
   ファイルと SHA-256 の一覧です。`listing.unavailable` は、ファイルを作れなかった対象の日と理由です
   （`not_stored`、`unreadable`、`fetch_failed`）。

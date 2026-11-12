@@ -39,9 +39,9 @@ def listing_config(config: dict) -> ListingConfig:
         section = {}
     if not isinstance(section, dict):
         raise ValueError("listing configuration must be a mapping.")
-    unknown = sorted(set(section) - _LISTING_KEYS)
+    unknown = sorted(str(key) for key in set(section) - _LISTING_KEYS)
     if unknown:
-        raise ValueError(f"listing has unknown keys: {', '.join(map(str, unknown))}.")
+        raise ValueError(f"listing has unknown keys: {', '.join(unknown)}.")
     enabled = section.get("enabled", False)
     if type(enabled) is not bool:
         raise ValueError("listing.enabled must be true or false.")

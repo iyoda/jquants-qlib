@@ -51,16 +51,22 @@ def fetch_year_end_listing(
     retry_max_delay_sec: float,
     retry_jitter_sec: float,
     sleeper: Callable[[float], None] = time.sleep,
+    pacer: _RequestPacer | None = None,
 ) -> YearEndListing:
     """Fetch the master for ``candidate`` and for the day after, and return it only when both hold.
+
+    ``pacer``, when given, spaces these requests after the caller's earlier ones too; without it the
+    interval applies between the two requests made here.
 
     The first response must pass ``normalize_listing`` for ``candidate``, which also shows that
     ``candidate`` is a session. The second must carry one date, in the following year, which shows
     that no session of the year follows. A response that fails either check raises ``ListingError``;
     a network or authentication failure propagates as raised by the client, after the retries.
     """
+    spacing = pacer if pacer is not None else _RequestPacer(request_interval_sec, sleeper)
+
     def master_for(day: dt.date) -> list[dict[str, object]]:
-        pacer.before_request()
+        spacing.before_request()
         return fetch_listing_master(
             client,
             day,
@@ -71,7 +77,6 @@ def fetch_year_end_listing(
             sleeper=sleeper,
         )
 
-    pacer = _RequestPacer(request_interval_sec, sleeper)
     rows = master_for(candidate)
     normalize_listing(rows, requested=candidate)
     next_day = candidate + dt.timedelta(days=1)

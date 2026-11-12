@@ -21,7 +21,7 @@ from jqqlib.listing_sync import (
     target_year_ends,
     write_provider_listings,
 )
-from jqqlib.manifest import write_dataset_artifacts
+from jqqlib.manifest import _sha256_json, write_dataset_artifacts
 from jqqlib.store_listing import raw_listing_path
 from tests.git_isolation import scrub_inherited_git_environment
 from tests.support.synthetic import write_synthetic_daily_quotes_csv
@@ -105,6 +105,7 @@ class ListingConfigTests(unittest.TestCase):
             {"first_year": 30},
             {"first_year": True},
             {"enable": True},
+            {"enabled": False, 1: "x", "typo": "y"},
         )
         for section in sections:
             with self.subTest(section=section), self.assertRaises(ValueError):
@@ -161,6 +162,20 @@ class FetchMissingYearEndsTests(_Workspace):
         self.assertEqual(failures, {not_the_last_session: "ListingError"})
         self.assertFalse(self.raw_dir.exists() and any(self.raw_dir.iterdir()))
 
+    def test_the_request_interval_holds_across_days_even_when_first_requests_fail(self) -> None:
+        waits: list[float] = []
+        client = _Client({"2030-12-30": ConnectionError("down"), "2031-12-30": ConnectionError("down")})
+        paced = {**RETRY, "request_interval_sec": 2.0, "sleeper": waits.append}
+        fetch_missing_year_ends(client, YEAR_ENDS, self.raw_dir, **paced)
+        self.assertEqual(client.requests, ["2030-12-30", "2031-12-30"])
+        self.assertEqual(waits, [2.0])
+
+    def test_a_stored_name_that_cannot_be_examined_counts_as_stored(self) -> None:
+        client = _Client()
+        with mock.patch("jqqlib.listing_sync.os.lstat", side_effect=PermissionError("denied")):
+            self.assertEqual(fetch_missing_year_ends(client, YEAR_ENDS, self.raw_dir, **RETRY), {})
+        self.assertEqual(client.requests, [])
+
     def test_an_unreadable_stored_day_is_left_alone(self) -> None:
         self.raw_dir.mkdir()
         damaged = raw_listing_path(self.raw_dir, YEAR_ENDS[0])
@@ -179,6 +194,9 @@ class WriteProviderListingsTests(_Workspace):
     def test_block_lists_exactly_the_files_written_with_their_hashes(self) -> None:
         block = write_provider_listings(self.raw_dir, self.qlib_dir, YEAR_ENDS)
         self.assertEqual(self.listing_files(), ["2030-12-30.json", "2031-12-30.json"])
+        self.assertEqual(
+            [entry["path"] for entry in block["files"]], ["listing/2030-12-30.json", "listing/2031-12-30.json"]
+        )
         self.assertEqual(block["target_days"], ["2030-12-30", "2031-12-30"])
         self.assertEqual(block["unavailable"], [])
         for entry in block["files"]:
@@ -215,6 +233,33 @@ class WriteProviderListingsTests(_Workspace):
                 {"day": "2030-12-30", "reason": "unreadable"},
             ],
         )
+
+    def test_a_stored_file_that_cannot_be_opened_is_reported_and_the_rest_is_written(self) -> None:
+        blocked = raw_listing_path(self.raw_dir, YEAR_ENDS[0])
+        blocked.unlink()
+        blocked.mkdir()
+        block = write_provider_listings(self.raw_dir, self.qlib_dir, YEAR_ENDS)
+        self.assertEqual(block["unavailable"], [{"day": "2030-12-30", "reason": "unreadable"}])
+        self.assertEqual(self.listing_files(), ["2031-12-30.json"])
+
+    def test_a_failed_replacement_puts_the_previous_subtree_back(self) -> None:
+        write_provider_listings(self.raw_dir, self.qlib_dir, YEAR_ENDS[:1])
+        before = (self.qlib_dir / "listing" / "2030-12-30.json").read_bytes()
+        real_rename = Path.rename
+
+        for failure in (OSError, KeyboardInterrupt):
+            def interrupted(path: Path, target: Path, failure: type[BaseException] = failure) -> Path:
+                if path.name.startswith(".listing.tmp-"):
+                    raise failure("stopped")
+                return real_rename(path, target)
+
+            with self.subTest(failure=failure.__name__):
+                with mock.patch.object(Path, "rename", autospec=True, side_effect=interrupted):
+                    with self.assertRaises(failure):
+                        write_provider_listings(self.raw_dir, self.qlib_dir, YEAR_ENDS)
+                self.assertEqual(self.listing_files(), ["2030-12-30.json"])
+                self.assertEqual((self.qlib_dir / "listing" / "2030-12-30.json").read_bytes(), before)
+                self.assertEqual(self.provider_entries(), ["calendars", "listing"])
 
     def test_with_no_usable_day_the_subtree_is_removed(self) -> None:
         write_provider_listings(self.raw_dir, self.qlib_dir, YEAR_ENDS)
@@ -257,9 +302,7 @@ class ProviderListingTests(_Workspace):
 
     def test_enabled_with_fetch_stores_and_writes_the_targets_from_first_year_on(self) -> None:
         client = _Client()
-        with mock.patch.object(pipeline, "create_jquants_client", return_value=client), mock.patch(
-            "jqqlib.fetch.time.sleep"
-        ), mock.patch("jqqlib.listing_sync.time.sleep"):
+        with mock.patch.object(pipeline, "create_jquants_client", return_value=client):
             block = pipeline.provider_listing(self.config(enabled=True, first_year=2031), self.qlib_dir, fetch=True)
         assert block is not None
         self.assertEqual(client.requests, ["2031-12-30", "2031-12-31"])
@@ -325,8 +368,13 @@ class ManifestListingBlockTests(_Workspace):
         block = write_provider_listings(self.raw_dir, self.qlib_dir, YEAR_ENDS)
         with_block, without_block = self.manifest(block), self.manifest(None)
         self.assertEqual(with_block["listing"], block)
+        self.assertEqual(len(block["files"]), 1)
         jsonschema.validate(with_block, load_schema("dataset_manifest"))
         self.assertEqual(with_block["dataset_id"], without_block["dataset_id"])
+        recorded = with_block["lineage"].pop("manifest_sha256")
+        self.assertEqual(recorded, _sha256_json(with_block))
+        with_block["listing"]["files"][0]["sha256"] = "0" * 64
+        self.assertNotEqual(recorded, _sha256_json(with_block))
 
     def test_the_schema_refuses_a_block_with_an_unknown_reason_or_a_path_outside_the_subtree(self) -> None:
         good = {"schema_version": 1, "target_days": [], "files": [], "unavailable": []}
@@ -360,6 +408,22 @@ class BuildWithListingTests(unittest.TestCase):
     def manifest(self, qlib_dir: Path) -> dict[str, Any]:
         return json.loads((qlib_dir / "dataset_manifest.json").read_text(encoding="utf-8"))
 
+    def provider_files(self, qlib_dir: Path) -> dict[str, bytes]:
+        return {
+            str(path.relative_to(qlib_dir)): path.read_bytes()
+            for path in sorted(qlib_dir.rglob("*"))
+            if path.is_file() and path.suffix != ".json"
+        }
+
+    def without_build_details(self, qlib_dir: Path) -> dict[str, Any]:
+        text = (qlib_dir / "dataset_manifest.json").read_text(encoding="utf-8")
+        stable = json.loads(text.replace(str(qlib_dir.parent), "<build>"))
+        self.assertIn("generated_at", stable)
+        del stable["generated_at"]
+        del stable["source"]
+        stable["lineage"] = {"parquet_sha256": stable["lineage"]["parquet_sha256"]}
+        return stable
+
     def test_a_disabled_build_matches_a_build_without_the_section(self) -> None:
         plain = self.build("plain", "")
         disabled = self.build("disabled", f"listing:\n  enabled: false\n  raw_dir: {self.root / 'raw'}\n")
@@ -368,10 +432,47 @@ class BuildWithListingTests(unittest.TestCase):
         )
         self.assertFalse((disabled / "listing").exists())
         self.assertFalse((self.root / "raw").exists())
+        self.assertEqual(self.provider_files(plain), self.provider_files(disabled))
         plain_manifest, disabled_manifest = self.manifest(plain), self.manifest(disabled)
         self.assertNotIn("listing", disabled_manifest)
-        self.assertEqual(set(plain_manifest), set(disabled_manifest))
+        self.assertEqual(self.without_build_details(plain), self.without_build_details(disabled))
         self.assertEqual(plain_manifest["dataset_id"], disabled_manifest["dataset_id"])
+
+    def test_run_all_fetches_the_year_end_and_records_it_and_survives_a_failed_fetch(self) -> None:
+        self.build("api", f"listing:\n  enabled: true\n  raw_dir: {self.root / 'raw'}\n")
+        config_path = self.root / "api.yaml"
+        parquet_path = self.root / "api" / "parquet" / "daily_quotes.parquet"
+        window = (dt.date(2030, 12, 23), dt.date(2031, 1, 10))
+        down = _Client({"2030-12-31": ConnectionError("down")})
+        up = _Client()
+        following = {"2031-01-01": "2031-01-06"}
+        with mock.patch.object(pipeline, "run_etl", return_value=parquet_path), mock.patch.dict(
+            NEXT_SESSION, following, clear=True
+        ):
+            with mock.patch.object(pipeline, "create_jquants_client", return_value=down):
+                with self.assertLogs("jqqlib", level="WARNING"):
+                    pipeline.run_all(config_path, *window)
+            failed = self.manifest(self.root / "api" / "qlib")["listing"]
+            with mock.patch.object(pipeline, "create_jquants_client", return_value=up):
+                pipeline.run_all(config_path, *window)
+            fetched = self.manifest(self.root / "api" / "qlib")["listing"]
+        self.assertEqual(failed["files"], [])
+        self.assertEqual(
+            failed["unavailable"], [{"day": "2030-12-31", "reason": "fetch_failed", "error": "ConnectionError"}]
+        )
+        self.assertEqual(up.requests, ["2030-12-31", "2031-01-01"])
+        self.assertEqual([entry["day"] for entry in fetched["files"]], ["2030-12-31"])
+        self.assertEqual(fetched["unavailable"], [])
+
+    def test_a_build_completes_when_a_stored_listing_cannot_be_read(self) -> None:
+        raw_dir = self.root / "raw"
+        raw_dir.mkdir()
+        (raw_dir / "2030-12-31.json").mkdir()
+        with self.assertLogs("jqqlib", level="WARNING"):
+            qlib_dir = self.build("blocked", f"listing:\n  enabled: true\n  raw_dir: {raw_dir}\n")
+        manifest = self.manifest(qlib_dir)
+        self.assertEqual(manifest["listing"]["unavailable"], [{"day": "2030-12-31", "reason": "unreadable"}])
+        self.assertEqual(manifest["dataset_id"], self.manifest(self.build("plain", ""))["dataset_id"])
 
     def test_an_enabled_build_writes_the_stored_year_end_and_records_it(self) -> None:
         raw_dir = self.root / "raw"
