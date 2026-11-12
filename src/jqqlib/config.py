@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 QLIB_ADJUSTMENT_VENDOR_FACTOR = "vendor_factor"
@@ -13,6 +14,44 @@ PUBLISH_CHECK_BASELINE_GIT = "git"
 PUBLISH_CHECK_BASELINE_FILE = "file"
 DEFAULT_PUBLISH_CHECK_BASELINE = PUBLISH_CHECK_BASELINE_GIT
 VALID_PUBLISH_CHECK_BASELINES = frozenset({PUBLISH_CHECK_BASELINE_GIT, PUBLISH_CHECK_BASELINE_FILE})
+DEFAULT_LISTING_RAW_DIR = "./data/listing_raw"
+_LISTING_KEYS = frozenset({"enabled", "raw_dir", "first_year"})
+
+
+@dataclass(frozen=True)
+class ListingConfig:
+    """The validated ``listing`` section: whether year-end listing masters are kept, where, and from which year."""
+
+    enabled: bool
+    raw_dir: Path
+    first_year: int | None
+
+
+def listing_config(config: dict) -> ListingConfig:
+    """Return the validated ``listing`` section; absent or empty means disabled.
+
+    ``enabled`` defaults to ``False``, ``raw_dir`` to ``./data/listing_raw`` and ``first_year`` to no lower
+    bound. Raises ``ValueError`` when the section is not a mapping, has an unknown key, ``enabled`` is not a
+    boolean, ``raw_dir`` is not a non-empty path string, or ``first_year`` is not a four-digit year.
+    """
+    section = config.get("listing")
+    if section is None:
+        section = {}
+    if not isinstance(section, dict):
+        raise ValueError("listing configuration must be a mapping.")
+    unknown = sorted(str(key) for key in set(section) - _LISTING_KEYS)
+    if unknown:
+        raise ValueError(f"listing has unknown keys: {', '.join(unknown)}.")
+    enabled = section.get("enabled", False)
+    if type(enabled) is not bool:
+        raise ValueError("listing.enabled must be true or false.")
+    raw_dir = section.get("raw_dir", DEFAULT_LISTING_RAW_DIR)
+    if not isinstance(raw_dir, str) or not raw_dir.strip() or "\x00" in raw_dir:
+        raise ValueError("listing.raw_dir must be a non-empty path string without null bytes.")
+    first_year = section.get("first_year")
+    if first_year is not None and (type(first_year) is not int or not 1000 <= first_year <= 9999):
+        raise ValueError("listing.first_year must be a four-digit year.")
+    return ListingConfig(enabled=enabled, raw_dir=Path(raw_dir), first_year=first_year)
 
 
 def qlib_adjustment(config: dict) -> str:
@@ -45,8 +84,8 @@ def load_config(path: Path) -> dict:
     Raises ``FileNotFoundError`` for a missing file and ``ValueError`` for invalid YAML, a document or a ``storage``
     or ``qlib`` section that is not a mapping, a ``publish_check`` section that is neither a mapping nor empty, a
     missing or invalid storage path, an unknown ``qlib.adjustment``, an invalid ``git_ref``, an unknown
-    ``publish_check.baseline``, an invalid ``publish_check.ledger_path`` or a ``file`` baseline without one. An
-    unhashable ``qlib.adjustment`` such as a list raises ``TypeError``.
+    ``publish_check.baseline``, an invalid ``publish_check.ledger_path``, a ``file`` baseline without one or an
+    invalid ``listing`` section. An unhashable ``qlib.adjustment`` such as a list raises ``TypeError``.
     """
     import yaml
 
@@ -85,6 +124,7 @@ def load_config(path: Path) -> dict:
     baseline = publish_check_baseline(config)
     if baseline == PUBLISH_CHECK_BASELINE_FILE or publish_check.get("ledger_path") is not None:
         publish_check_ledger_path(config)
+    listing_config(config)
     return config
 
 

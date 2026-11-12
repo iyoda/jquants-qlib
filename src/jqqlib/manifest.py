@@ -657,6 +657,7 @@ def _dataset_manifest_payload(
     qlib_dir: Path,
     source: dict[str, Any],
     adjustment: str,
+    listing: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     import pandas as pd
 
@@ -706,6 +707,8 @@ def _dataset_manifest_payload(
         },
         "source": source,
     }
+    if listing is not None:
+        payload["listing"] = listing
     payload["lineage"]["manifest_sha256_scope"] = "payload_without_manifest_sha256"
     payload["lineage"]["manifest_sha256"] = _sha256_json(payload)
     return payload
@@ -740,16 +743,19 @@ def write_dataset_artifacts(
     qlib_dir: Path,
     source: dict[str, Any],
     adjustment: str = DEFAULT_QLIB_ADJUSTMENT,
+    listing: dict[str, Any] | None = None,
 ) -> tuple[Path, Path]:
     """Write the dataset manifest and the quality report from one read and one quality inspection.
 
-    The manifest lineage records the SHA-256 of the final quality report. Returns
-    ``(manifest_path, quality_report_path)``.
+    The manifest lineage records the SHA-256 of the final quality report. ``listing``, when given, is
+    recorded as the manifest's ``listing`` block and is covered by ``lineage.manifest_sha256``; without it
+    the manifest has no such key. Returns ``(manifest_path, quality_report_path)``.
     """
     df = _read_dataset_parquet(parquet_path)
     quality = _build_quality_inspection(df, qlib_dir, adjustment=adjustment)
     manifest = _dataset_manifest_payload(
-        df, quality, parquet_path=parquet_path, qlib_dir=qlib_dir, source=source, adjustment=adjustment
+        df, quality, parquet_path=parquet_path, qlib_dir=qlib_dir, source=source, adjustment=adjustment,
+        listing=listing,
     )
     manifest_path = write_json_atomic(dataset_manifest_path(qlib_dir), manifest)
     quality_path = write_json_atomic(

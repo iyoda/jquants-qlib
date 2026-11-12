@@ -330,6 +330,36 @@ JSON contract は wheel に同梱しており、インストール済みパッ�
 `src/jqqlib/contracts/dataset_quality_report.schema.json` です。consumer は producer の
 Python module ではなく、これらの JSON artifact を読む前提です。
 
+### 6) 年末時点の上場銘柄一覧（`listing/`）
+
+`listing.enabled: true` にすると、provider に `listing/<YYYY-MM-DD>.json` が加わります。各ファイルは、
+その年の最後の営業日に上場していた全銘柄の、銘柄コード・市場区分・商品区分です。既定は無効で、無効のときは
+API を呼ばず、provider と manifest は今までと同じです。
+
+- 対象は、provider のカレンダーで終わっている年（翌年の営業日がある年）の最後の営業日です。
+  `listing.first_year` で、対象にする最初の年を決められます。
+- `run-all` と `run-daily` は、保存していない対象の日を API から取り、`listing.raw_dir` に基準日ごとの
+  1 ファイルとして保存します。保存した日は取り直しません。`convert` と `bootstrap-csv` は API を呼ばず、
+  保存済みの応答から `listing/` を作ります。
+- 取得に失敗しても、保存した応答が読めなくても、株価の更新は止まりません。警告として出力し、manifest の
+  `listing.unavailable` に記録します。保存されなかった日は、次の実行でもう一度試します。provider への
+  書き込みに失敗した場合は別で、コマンドが失敗します。そのとき、前の `listing/` は元に戻します。
+- 保存していない対象の日 1 つにつき、API を 2 回呼びます。API の履歴の範囲より前の年は、毎回の実行で
+  失敗し続けるので、`listing.first_year` で外してください。
+- `publish-check` と台帳は、株価の Parquet が変わったかどうかだけを見ます。株価が同じで一覧だけが増えた
+  build（保存した応答を後から置いて `convert` した場合など）は、「変更なし」と判定されます。その build を
+  公開・バックアップするかどうかは、manifest の `listing.files` を見て、手で判断してください。
+- `listing/` は、provider を作るたびに全体を作り直します。manifest の `listing.files` が、そこにある
+  ファイルと SHA-256 の一覧です。`listing.unavailable` は、ファイルを作れなかった対象の日と理由です
+  （`not_stored`、`unreadable`、`fetch_failed`）。
+- `unreadable` は、保存したファイルが検査を通らないことを表します。保存済みの日は置き換えないので、
+  自動では直りません。ファイルを退避してから、取り直してください。API の履歴の範囲から外れた年は
+  取り直せないので、`listing.raw_dir` はバックアップの対象にしてください。
+- `listing.raw_dir` には、会社名などを含む応答の全項目が入ります。J-Quants のデータは再配布できないので、
+  Git の管理の外（既定の `./data/` の下）に置いてください。
+- 無効に戻しても、すでにある `listing/` は消しません。manifest から `listing` が無くなるので、
+  読む側は manifest に載っているファイルだけを使ってください。
+
 ## 日次運用
 
 日次更新は `run-daily` を使います。既定では実行日を基準に直近営業日から試し、祝日や API 未反映でデータが空の場合は最大 10 営業日前までさかのぼります。取得可能な最新営業日が見つかると、既存 Parquet の最大日付の翌日からその最新営業日までを range で取り込みます。成功時は `run-all` と同じく Parquet を upsert し、Qlib dataset、`dataset_manifest.json`、`dataset_quality_report.json` を更新します。

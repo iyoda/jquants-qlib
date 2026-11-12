@@ -63,3 +63,12 @@ qlib:
 #   retry_max_delay_sec: 8.0
 #   retry_jitter_sec: 0.3
 #   request_interval_sec: 1.1
+
+# 年末時点の上場銘柄一覧（市場区分・商品区分）を provider の listing/ に置く。既定は無効。
+# 有効にすると、run-all / run-daily が、終わった年の最後の営業日の一覧を API から取り、
+# raw_dir に基準日ごとに 1 度だけ保存する。取得に失敗しても株価の更新は止まらない。
+# raw_dir は Git の管理の外に置くこと（J-Quants のデータは再配布できない）。
+# listing:
+#   enabled: true
+#   raw_dir: "./data/listing_raw"
+#   first_year: 2024

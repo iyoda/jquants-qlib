@@ -116,8 +116,8 @@ def _stored_day(document: Mapping[str, object], key: str, path: Path) -> dt.date
 def read_raw_listing(raw_dir: Path, day: dt.date) -> YearEndListing:
     """Load the stored response for ``day`` and apply the checks a fresh response must pass.
 
-    Raises ``ListingError`` when the file is absent, is not the stored shape, names another day, or
-    does not pass ``normalize_listing`` and ``confirm_year_end``. These are consistency checks: an
+    Raises ``ListingError`` when the file is absent, cannot be read, is not the stored shape, names
+    another day, or does not pass ``normalize_listing`` and ``confirm_year_end``. These are consistency checks: an
     edit that keeps the file consistent (a removed row, another known market code) is not detected.
     """
     path = raw_listing_path(raw_dir, day)
@@ -127,6 +127,8 @@ def read_raw_listing(raw_dir: Path, day: dt.date) -> YearEndListing:
         raise ListingError(f"no stored listing for {day}") from exc
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ListingError(f"{path.name} is not valid JSON") from exc
+    except OSError as exc:
+        raise ListingError(f"{path.name} cannot be read ({type(exc).__name__})") from exc
     if (
         not isinstance(document, dict)
         or set(document) != _RAW_KEYS

@@ -16,7 +16,15 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
 - `jqqlib.fetch_listing.fetch_year_end_listing` requests the master for a candidate year end and for the
   day after, and returns the response only when the first is dated as requested and the second is dated
   in the following year. `jqqlib.store_listing` keeps each checked response in a write-once file per day
-  (`write_raw_listing`, `read_raw_listing`, `stored_listing_days`). No command calls them yet.
+  (`write_raw_listing`, `read_raw_listing`, `stored_listing_days`).
+- `listing.enabled: true` (default `false`) makes `run-all` and `run-daily` fetch the year-end listing
+  master of every finished year in the provider calendar that is not stored yet, and makes every
+  provider build (`convert` and `bootstrap-csv` included) write `listing/<YYYY-MM-DD>.json` from the
+  stored responses. The manifest gains a `listing` block with the target days, the files and their
+  SHA-256, and the days that have no file and why. A failed fetch or an unreadable stored response is
+  logged and recorded there and does not fail the price build; a failure to write the provider does.
+  `publish-check` and the ledger do not look at the listing. With the default, nothing is requested,
+  read or written and the manifest is unchanged. New keys: `listing.raw_dir` (default `./data/listing_raw`) and `listing.first_year`.
 - `convert`, `bootstrap-csv`, `run-all`, `run-daily`, `publish` and `run-etl` (which writes the
   provider's source Parquet) hold an exclusive lock on the provider for the whole command, in `.<name>.write.lock` beside the provider. When another
   process holds it, the command exits 75 at once and leaves the provider unchanged.
