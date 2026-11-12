@@ -310,6 +310,10 @@ API に要求しても、応答の日付は要求と一致するので、日付�
 翌年でなければ拒否します。API は休業日の要求に翌営業日の一覧を返すので、翌営業日が翌年なら、候補より後に
 その年の営業日はありません。
 
+`confirm_year_end` は、候補そのものが営業日かどうかは見ません。候補の日の一覧を `normalize_listing` に通すと、
+候補が休業日なら応答の日付が要求と一致しないので、そこで拒否されます。年末の日として使うには、両方を通す
+必要があります。
+
 - 名前: `completed_year_ends`、`confirm_year_end`、`ListingError`
 - テスト: `tests/test_listing.py` の
   `test_a_missing_final_session_yields_an_earlier_candidate_that_only_confirmation_rejects`
@@ -320,7 +324,13 @@ API は、休業日や未来の日付の要求に、別の日の一覧を返し�
 利用者は未来の情報で銘柄を選ぶことになります。`normalize_listing` は、全部の行の日付が要求と一致することを
 求め、前の日付でも後の日付でも拒否します。空の応答、必須の項目の欠け、重複した銘柄コード、公開されている
 区分表に無い市場区分・商品区分も拒否します。新しい区分が増えたときに、意味の分からない行を黙って通さない
-ためです。
+ためです。区分が増えると、その行を含む応答は、何度取り直しても拒否されます。直すには、公開されている区分表を
+確かめ、`KNOWN_PRODUCT_CATEGORIES` か `KNOWN_MARKET_CODES` とテストを更新してから、取り直します。
+
+日付は、`YYYY-MM-DD` の文字列、`date`、時刻が 0 時でタイムゾーンの無い `datetime` だけを受け入れます。
+先頭の 10 文字だけを比べると、後ろに余分な文字のついた値を、正しい日付として通してしまうためです。銘柄コードと
+区分コードは、公開されているとおりの文字列だけを受け入れます。数値で渡されたコードは、先頭の 0 が落ちている
+おそれがあるので拒否します。
 
 出力に残すのは、銘柄コード、市場区分、商品区分だけです。会社名や業種は、応答にあっても落とします。
 `listing_document` は、行の順序が違っても同じバイト列を返します。
@@ -328,6 +338,8 @@ API は、休業日や未来の日付の要求に、別の日の一覧を返し�
 - 名前: `normalize_listing`、`listing_document`、`KNOWN_PRODUCT_CATEGORIES`、`KNOWN_MARKET_CODES`
 - テスト: `tests/test_listing.py` の
   `test_a_response_dated_other_than_requested_is_refused_in_both_directions`、
+  `test_a_date_that_only_starts_like_the_requested_day_is_refused`、
+  `test_codes_that_are_not_text_exactly_as_published_are_refused`、
   `test_only_code_market_and_product_category_survive`、`test_row_order_does_not_change_the_bytes`
 
 ## スクリプト（`scripts/`）
