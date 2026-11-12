@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import pandas as pd
 
@@ -149,10 +151,67 @@ class RawListingStoreTests(unittest.TestCase):
         wrong_year = YearEndListing(listing.day, listing.confirmation_requested, dt.date(2031, 12, 31), listing.rows)
         wrong_rows = YearEndListing(listing.day, listing.confirmation_requested, NEXT_SESSION,
                                     tuple(_frame(NEXT_SESSION).to_dict("records")))
-        for bad in (wrong_year, wrong_rows):
-            with self.subTest(bad=bad.confirmation_effective), self.assertRaises(ListingError):
+        wrong_request = YearEndListing(listing.day, dt.date(2032, 1, 1), NEXT_SESSION, listing.rows)
+        for name, bad in (("year", wrong_year), ("rows", wrong_rows), ("request", wrong_request)):
+            with self.subTest(name=name), self.assertRaises(ListingError):
                 write_raw_listing(self.raw_dir, bad)
         self.assertEqual(list(self.raw_dir.glob("*")) if self.raw_dir.exists() else [], [])
+
+    def test_a_writer_that_loses_the_race_does_not_replace_the_stored_file(self) -> None:
+        winner = _fetch(_client(**{"2031_12_30": _frame(YEAR_END, ("90010", "90020", "90030"))}))
+        winner_dir = self.raw_dir.parent / "winner"
+        winner_bytes = write_raw_listing(winner_dir, winner).read_bytes()
+        path = raw_listing_path(self.raw_dir, YEAR_END)
+        real_link = os.link
+
+        def another_writer_finishes_first(source, target):
+            Path(target).write_bytes(winner_bytes)
+            return real_link(source, target)
+
+        with mock.patch("jqqlib.store_listing.os.link", side_effect=another_writer_finishes_first):
+            with self.assertRaises(ListingError):
+                write_raw_listing(self.raw_dir, _listing())
+        self.assertEqual(path.read_bytes(), winner_bytes)
+        self.assertEqual([entry.name for entry in self.raw_dir.iterdir()], [path.name])
+
+    def test_a_failed_write_leaves_neither_the_file_nor_a_temporary(self) -> None:
+        with mock.patch("jqqlib.store_listing.os.fsync", side_effect=OSError("disk")):
+            with self.assertRaises(OSError):
+                write_raw_listing(self.raw_dir, _listing())
+        self.assertEqual(list(self.raw_dir.iterdir()), [])
+
+    def test_a_dangling_link_at_the_stored_name_is_refused_and_kept(self) -> None:
+        self.raw_dir.mkdir(parents=True)
+        path = raw_listing_path(self.raw_dir, YEAR_END)
+        path.symlink_to(self.raw_dir / "absent.json")
+        with self.assertRaises(ListingError):
+            write_raw_listing(self.raw_dir, _listing())
+        self.assertTrue(path.is_symlink())
+
+    def test_every_response_field_is_stored_with_missing_values_as_null(self) -> None:
+        frame = pd.DataFrame(
+            {
+                "Date": pd.to_datetime(["2031-12-30", "2031-12-30"]),
+                "Code": ["90020", "90010"],
+                "CoName": ["Invented Works", None],
+                "ScaleCat": ["-", float("nan")],
+                "Mkt": ["0111", "0113"],
+                "ProdCat": ["011", "011"],
+                "Lots": [100, 1],
+                "Ratio": [0.5, 1.5],
+                "Flag": [True, False],
+            }
+        )
+        path = write_raw_listing(self.raw_dir, _fetch(_client(**{"2031_12_30": frame})))
+        self.assertEqual(
+            path.read_bytes(),
+            b'{"confirmation":{"effective_date":"2032-01-05","requested_date":"2031-12-31"},'
+            b'"effective_date":"2031-12-30","requested_date":"2031-12-30","rows":['
+            b'{"CoName":null,"Code":"90010","Date":"2031-12-30","Flag":false,"Lots":1,"Mkt":"0113",'
+            b'"ProdCat":"011","Ratio":1.5,"ScaleCat":null},'
+            b'{"CoName":"Invented Works","Code":"90020","Date":"2031-12-30","Flag":true,"Lots":100,"Mkt":"0111",'
+            b'"ProdCat":"011","Ratio":0.5,"ScaleCat":"-"}],"schema":1}',
+        )
 
     def test_reading_refuses_an_absent_damaged_or_tampered_file(self) -> None:
         with self.assertRaises(ListingError):
@@ -171,6 +230,9 @@ class RawListingStoreTests(unittest.TestCase):
             "confirmation for another request": lambda d: d["confirmation"].__setitem__("requested_date", "2032-01-01"),
             "row dated later": lambda d: d["rows"][0].__setitem__("Date", "2032-01-05"),
             "unknown schema": lambda d: d.__setitem__("schema", 2),
+            "boolean schema": lambda d: d.__setitem__("schema", True),
+            "float schema": lambda d: d.__setitem__("schema", 1.0),
+            "nested value": lambda d: d["rows"][0].__setitem__("CoName", ["x"]),
             "extra key": lambda d: d.__setitem__("note", "x"),
             "rows not a list": lambda d: d.__setitem__("rows", {}),
         }

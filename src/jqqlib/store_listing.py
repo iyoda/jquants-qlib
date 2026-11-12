@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
-import tempfile
+import uuid
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -33,14 +33,20 @@ def _raw_value(field: str, value: object, position: int) -> object:
         return None
     if field == "Date":
         return _as_day(value, f"row {position}: Date").isoformat()
-    if isinstance(value, (str, bool, int, float)):
+    if type(value) in (str, bool, int, float):
         return value
     raise ListingError(f"row {position}: {field} has an unsupported type {type(value).__name__}")
 
 
-def _raw_bytes(listing: YearEndListing) -> bytes:
+def _check(listing: YearEndListing) -> None:
+    if listing.confirmation_requested != listing.day + dt.timedelta(days=1):
+        raise ListingError(f"the confirmation is not for the day after {listing.day}")
     normalize_listing(listing.rows, requested=listing.day)
     confirm_year_end(listing.day, listing.confirmation_effective)
+
+
+def _raw_bytes(listing: YearEndListing) -> bytes:
+    _check(listing)
     rows = [
         {field: _raw_value(field, value, position) for field, value in row.items()}
         for position, row in enumerate(listing.rows)
@@ -60,31 +66,46 @@ def _raw_bytes(listing: YearEndListing) -> bytes:
     ).encode("utf-8")
 
 
-def write_raw_listing(raw_dir: Path, listing: YearEndListing) -> Path:
-    """Store ``listing`` under ``raw_dir`` and return its path; a stored day is never rewritten.
+def _fsync_directory(directory: Path) -> None:
+    descriptor = os.open(directory, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
-    The response is checked again before anything is written. Storing the same response twice
-    changes nothing. A different response for a stored day raises ``ListingError`` and leaves the
-    stored file as it is: the API's history is a rolling window, so the first checked copy is the
-    one a later rebuild must reproduce.
+
+def write_raw_listing(raw_dir: Path, listing: YearEndListing) -> Path:
+    """Store ``listing`` under ``raw_dir`` and return its path; a stored day is never replaced.
+
+    The response is checked again before anything is written. The file is completed under a
+    temporary name and then given its final name by a hard link, which fails when that name is
+    taken, so two writers cannot both win. Storing the same response again changes nothing. A
+    different response for a stored day raises ``ListingError`` and leaves the stored file as it
+    is: the API's history is a rolling window, so the first checked copy is the one a later
+    rebuild must reproduce. The file and its directory entry are flushed to disk before returning.
     """
     payload = _raw_bytes(listing)
     path = raw_listing_path(raw_dir, listing.day)
-    if path.exists():
-        if path.read_bytes() != payload:
-            raise ListingError(f"{path.name} is already stored with different content")
-        return path
     path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temporary = path.with_name(f".{path.name}.tmp-{uuid.uuid4().hex}")
     try:
-        with os.fdopen(descriptor, "wb") as handle:
+        with temporary.open("xb") as handle:
             handle.write(payload)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temporary, path)
-    except BaseException:
-        Path(temporary).unlink(missing_ok=True)
-        raise
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            try:
+                stored = path.read_bytes()
+            except OSError as exc:
+                raise ListingError(f"{path.name} exists but cannot be read") from exc
+            if stored != payload:
+                raise ListingError(f"{path.name} is already stored with different content") from None
+            return path
+    finally:
+        temporary.unlink(missing_ok=True)
+    _fsync_directory(path.parent)
     return path
 
 
@@ -93,10 +114,11 @@ def _stored_day(document: Mapping[str, object], key: str, path: Path) -> dt.date
 
 
 def read_raw_listing(raw_dir: Path, day: dt.date) -> YearEndListing:
-    """Load the stored response for ``day`` and check it as strictly as a fresh one.
+    """Load the stored response for ``day`` and apply the checks a fresh response must pass.
 
     Raises ``ListingError`` when the file is absent, is not the stored shape, names another day, or
-    no longer passes ``normalize_listing`` and ``confirm_year_end``.
+    does not pass ``normalize_listing`` and ``confirm_year_end``. These are consistency checks: an
+    edit that keeps the file consistent (a removed row, another known market code) is not detected.
     """
     path = raw_listing_path(raw_dir, day)
     try:
@@ -105,13 +127,22 @@ def read_raw_listing(raw_dir: Path, day: dt.date) -> YearEndListing:
         raise ListingError(f"no stored listing for {day}") from exc
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ListingError(f"{path.name} is not valid JSON") from exc
-    if not isinstance(document, dict) or set(document) != _RAW_KEYS or document["schema"] != RAW_LISTING_SCHEMA:
+    if (
+        not isinstance(document, dict)
+        or set(document) != _RAW_KEYS
+        or type(document["schema"]) is not int
+        or document["schema"] != RAW_LISTING_SCHEMA
+    ):
         raise ListingError(f"{path.name} is not a stored listing of schema {RAW_LISTING_SCHEMA}")
     confirmation, rows = document["confirmation"], document["rows"]
     if not isinstance(confirmation, dict) or set(confirmation) != _CONFIRMATION_KEYS:
         raise ListingError(f"{path.name}: malformed confirmation")
     if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
         raise ListingError(f"{path.name}: malformed rows")
+    for position, row in enumerate(rows):
+        for field, value in row.items():
+            if value is not None and type(value) not in (str, bool, int, float):
+                raise ListingError(f"{path.name}: row {position}: {field} is not a plain value")
     if _stored_day(document, "requested_date", path) != day or _stored_day(document, "effective_date", path) != day:
         raise ListingError(f"{path.name} does not hold the master for {day}")
     listing = YearEndListing(
@@ -120,17 +151,15 @@ def read_raw_listing(raw_dir: Path, day: dt.date) -> YearEndListing:
         confirmation_effective=_stored_day(confirmation, "effective_date", path),
         rows=tuple(rows),
     )
-    if listing.confirmation_requested != day + dt.timedelta(days=1):
-        raise ListingError(f"{path.name}: the confirmation is not for the day after {day}")
-    normalize_listing(listing.rows, requested=day)
-    confirm_year_end(day, listing.confirmation_effective)
+    _check(listing)
     return listing
 
 
 def stored_listing_days(raw_dir: Path) -> list[dt.date]:
     """Return the days that have a stored file under ``raw_dir``, oldest first.
 
-    A file whose name is not a ``YYYY-MM-DD.json`` day is ignored; contents are not checked here.
+    A file whose name is not a ``YYYY-MM-DD.json`` day is ignored. Contents are not checked: a day
+    counts as usable only after ``read_raw_listing`` accepts it.
     """
     days = []
     for path in Path(raw_dir).glob("*.json"):

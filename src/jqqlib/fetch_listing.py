@@ -56,7 +56,8 @@ def fetch_year_end_listing(
 
     The first response must pass ``normalize_listing`` for ``candidate``, which also shows that
     ``candidate`` is a session. The second must carry one date, in the following year, which shows
-    that no session of the year follows. Any other outcome raises ``ListingError``.
+    that no session of the year follows. A response that fails either check raises ``ListingError``;
+    a network or authentication failure propagates as raised by the client, after the retries.
     """
     def master_for(day: dt.date) -> list[dict[str, object]]:
         pacer.before_request()
