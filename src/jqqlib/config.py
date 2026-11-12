@@ -27,6 +27,12 @@ class ListingConfig:
     first_year: int | None
 
 
+def _is_inside(path: Path, directory: Path) -> bool:
+    inner = [part.casefold() for part in path.resolve().parts]
+    outer = [part.casefold() for part in directory.resolve().parts]
+    return inner[: len(outer)] == outer
+
+
 def listing_config(config: dict) -> ListingConfig:
     """Return the validated ``listing`` section; absent or empty means disabled.
 
@@ -85,7 +91,9 @@ def load_config(path: Path) -> dict:
     or ``qlib`` section that is not a mapping, a ``publish_check`` section that is neither a mapping nor empty, a
     missing or invalid storage path, an unknown ``qlib.adjustment``, an invalid ``git_ref``, an unknown
     ``publish_check.baseline``, an invalid ``publish_check.ledger_path``, a ``file`` baseline without one, an
-    invalid ``listing`` section or a ``listing.raw_dir`` inside ``storage.qlib_dir``. An unhashable
+    invalid ``listing`` section or, with the listing enabled, a ``listing.raw_dir`` inside
+    ``storage.qlib_dir`` (compared without regard to letter case, so that a file system that ignores
+    case cannot hide it). An unhashable
     ``qlib.adjustment`` such as a list raises ``TypeError``.
     """
     import yaml
@@ -125,9 +133,8 @@ def load_config(path: Path) -> dict:
     baseline = publish_check_baseline(config)
     if baseline == PUBLISH_CHECK_BASELINE_FILE or publish_check.get("ledger_path") is not None:
         publish_check_ledger_path(config)
-    listing_raw_dir = listing_config(config).raw_dir.resolve()
-    provider_dir = Path(config["storage"]["qlib_dir"]).resolve()
-    if listing_raw_dir == provider_dir or provider_dir in listing_raw_dir.parents:
+    listing = listing_config(config)
+    if listing.enabled and _is_inside(listing.raw_dir, Path(config["storage"]["qlib_dir"])):
         raise ValueError(
             "listing.raw_dir must be outside storage.qlib_dir; a provider build replaces its listing files."
         )

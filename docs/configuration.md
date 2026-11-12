@@ -112,7 +112,7 @@ security find-generic-password -s jquants-api-key >/dev/null && echo present || 
 | `fundamentals.retry_jitter_sec` | `0.3` | 財務 API のジッター秒 |
 | `fundamentals.request_interval_sec` | `1.1` | 財務 API のリクエスト間隔秒 |
 | `listing.enabled` | `false` | 年末時点の上場銘柄一覧を保存し、provider の `listing/` に置くか。`false` なら API を呼ばず、何も書かない。前の manifest が記録している `listing/` があれば消す |
-| `listing.raw_dir` | `./data/listing_raw` | 取得した応答を基準日ごとに 1 度だけ保存する場所。Git の管理の外、かつ `storage.qlib_dir` の外に置く（中に置くと設定エラー） |
+| `listing.raw_dir` | `./data/listing_raw` | 取得した応答を基準日ごとに 1 度だけ保存する場所。Git の管理の外、かつ `storage.qlib_dir` の外に置く（有効のとき、中に置くと設定エラー） |
 | `listing.first_year` | なし | 対象にする最初の年。省略すると、provider のカレンダーにある終わった年の全部 |
 
 表に無いキーが YAML に残っていても、エラーにはならず単に無視されます。ただし `listing` の中の知らないキーは

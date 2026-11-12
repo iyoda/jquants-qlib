@@ -13,6 +13,7 @@ import pandas as pd
 from jqqlib.fetch_listing import fetch_listing_master, fetch_year_end_listing
 from jqqlib.listing import ListingError, YearEndListing, listing_document, single_effective_day
 from jqqlib.store_listing import (
+    checked_raw_listing_bytes,
     raw_listing_path,
     read_raw_listing,
     stored_listing_days,
@@ -145,6 +146,37 @@ class RawListingStoreTests(unittest.TestCase):
         with self.assertRaises(ListingError):
             write_raw_listing(self.raw_dir, changed)
         self.assertEqual(path.read_bytes(), before)
+
+    def test_checked_bytes_are_the_stored_file_and_an_absent_or_inconsistent_file_is_refused(self) -> None:
+        path = write_raw_listing(self.raw_dir, _listing())
+        good = path.read_bytes()
+        self.assertEqual(checked_raw_listing_bytes(self.raw_dir, YEAR_END), good)
+        document = json.loads(good)
+        document["confirmation"]["effective_date"] = "2031-12-31"
+        for damaged in (b"{not json", json.dumps(document).encode()):
+            path.unlink()
+            path.write_bytes(damaged)
+            with self.subTest(damaged=damaged[:12]), self.assertRaises(ListingError):
+                checked_raw_listing_bytes(self.raw_dir, YEAR_END)
+        path.unlink()
+        with self.assertRaises(ListingError):
+            checked_raw_listing_bytes(self.raw_dir, YEAR_END)
+
+    def test_checked_bytes_come_from_one_read_of_the_file(self) -> None:
+        path = write_raw_listing(self.raw_dir, _listing())
+        good = path.read_bytes()
+        reads: list[bytes] = []
+        real_read = Path.read_bytes
+
+        def changes_after_the_first_read(target: Path) -> bytes:
+            reads.append(real_read(target))
+            target.unlink()
+            target.write_bytes(b"{replaced after the check")
+            return reads[-1]
+
+        with mock.patch.object(Path, "read_bytes", autospec=True, side_effect=changes_after_the_first_read):
+            self.assertEqual(checked_raw_listing_bytes(self.raw_dir, YEAR_END), good)
+        self.assertEqual(reads, [good])
 
     def test_an_unchecked_response_is_not_stored_and_leaves_no_file(self) -> None:
         listing = _listing()
