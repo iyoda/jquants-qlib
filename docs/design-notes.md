@@ -374,6 +374,28 @@ API の履歴は、契約のプランによって、さかのぼれる範囲が�
   `test_a_writer_that_loses_the_race_does_not_replace_the_stored_file`、
   `test_reading_refuses_an_absent_damaged_or_tampered_file`
 
+### 一覧の取得は、株価の更新を止めない
+
+年末の一覧が要るのは年に 1 度で、株価は毎日要ります。一覧の取得の失敗で日次の更新を止めると、年に 1 度の
+情報のために毎日の更新を失います。`provider_listing` は、資格情報が無い場合も含めて、取得の失敗を例外に
+せず、警告と manifest の `listing.unavailable` に残します。失敗した日は保存されないので、次の実行で
+もう一度試されます。
+
+失敗を黙って通さないために、manifest には、対象の日、作れたファイルとその SHA-256、作れなかった日と理由を
+書きます。読む側は、要る基準日のファイルが `listing.files` に無ければ、使わずに止まれます。`listing` は
+manifest の SHA-256 の対象に入りますが、`dataset_id` には入れていません。`dataset_id` は株価のデータを
+表すもので、一覧の有無で変わると、同じ株価の build を同じものと判定できなくなるためです。
+
+`listing/` は、provider を作るたびに全体を置き換えます。前の build のファイルを引き継ぐと、manifest に
+無いファイルが残るためです。機能が無効のときは、何も読み書きしません。既存の利用者の出力を変えないためです。
+
+- 名前: `provider_listing`、`fetch_missing_year_ends`、`write_provider_listings`、`target_year_ends`、
+  `listing_config`
+- テスト: `tests/test_listing_sync.py` の `test_disabled_requests_reads_and_writes_nothing`、
+  `test_a_missing_credential_is_recorded_and_not_raised`、
+  `test_one_failing_day_is_reported_and_does_not_stop_the_others`、
+  `test_a_file_that_is_no_longer_a_target_is_removed`
+
 ## スクリプト（`scripts/`）
 
 - `check_comments.py`: CONTRIBUTING の規約を検査します。`src/jqqlib` と `scripts` の外のパスと、存在しない

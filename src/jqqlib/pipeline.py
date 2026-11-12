@@ -23,6 +23,7 @@ from .audit import GapAuditResult, audit_dataset_gaps, write_audit_sidecar
 from .config import (
     PUBLISH_CHECK_BASELINE_FILE,
     QLIB_ADJUSTMENT_VENDOR_FACTOR,
+    listing_config,
     load_config,
     publish_check_baseline,
     publish_check_git_ref,
@@ -38,6 +39,12 @@ from .ledger import (
     jqqlib_source_commit,
     ledger_entry_from_manifest,
     read_ledger,
+)
+from .listing_sync import (
+    fetch_missing_year_ends,
+    provider_sessions,
+    target_year_ends,
+    write_provider_listings,
 )
 from .manifest import (
     DATASET_MANIFEST_FILENAME,
@@ -161,6 +168,45 @@ def _csv_source(csv_path: Path) -> dict[str, Any]:
     }
 
 
+def provider_listing(config: dict, qlib_dir: Path, *, fetch: bool) -> dict[str, Any] | None:
+    """Rebuild the provider's ``listing`` subtree and return its manifest block; ``None`` when disabled.
+
+    With ``listing.enabled`` false nothing is requested, read or written. Otherwise the year ends of the
+    finished years in the provider calendar are the targets. ``fetch`` asks the API for the targets that
+    have no stored response; a failure there, including a missing credential, is logged and recorded in
+    the block and never raised, so the price build it follows still completes.
+    """
+    listing = listing_config(config)
+    if not listing.enabled:
+        return None
+    days = target_year_ends(provider_sessions(qlib_dir), listing.first_year)
+    failures: dict[dt.date, str] = {}
+    if fetch:
+        etl_conf = _etl_config(config)
+        try:
+            client = create_jquants_client(config)
+        except Exception as exc:
+            failures = dict.fromkeys(days, type(exc).__name__)
+        else:
+            failures = fetch_missing_year_ends(
+                client,
+                days,
+                listing.raw_dir,
+                request_interval_sec=etl_conf["request_interval_sec"],
+                retries=etl_conf["retries"],
+                retry_base_delay_sec=etl_conf["retry_base_delay_sec"],
+                retry_max_delay_sec=etl_conf["retry_max_delay_sec"],
+                retry_jitter_sec=etl_conf["retry_jitter_sec"],
+            )
+    block = write_provider_listings(listing.raw_dir, qlib_dir, days, failures)
+    for entry in block["unavailable"]:
+        logger.warning(
+            "Listing master for %s is unavailable: %s%s.",
+            entry["day"], entry["reason"], f" ({entry['error']})" if "error" in entry else "",
+        )
+    return block
+
+
 def run_etl(config_path: Path, start_date: dt.date, end_date: dt.date) -> Path:
     """Fetch daily quotes of the configured universe and write them to the Parquet; return its path."""
     validate_date_range(start_date, end_date)
@@ -206,7 +252,8 @@ def run_bootstrap_csv(config_path: Path, csv_path: Path) -> Path:
     )
     parquet_to_qlib(parquet_path, qlib_dir, adjustment=adjustment)
     write_dataset_artifacts(
-        parquet_path=parquet_path, qlib_dir=qlib_dir, source=_csv_source(csv_path), adjustment=adjustment
+        parquet_path=parquet_path, qlib_dir=qlib_dir, source=_csv_source(csv_path), adjustment=adjustment,
+        listing=provider_listing(config, qlib_dir, fetch=False),
     )
     return qlib_dir
 
@@ -262,6 +309,7 @@ def run_all(config_path: Path, start_date: dt.date, end_date: dt.date) -> None:
         qlib_dir=qlib_dir,
         source=_api_source(start_date, end_date, codes),
         adjustment=adjustment,
+        listing=provider_listing(config, qlib_dir, fetch=True),
     )
 
 
@@ -1163,6 +1211,7 @@ def _run_command(args: argparse.Namespace) -> None:
             qlib_dir=qlib_dir,
             source={"kind": "parquet", "parquet_path": str(parquet_path)},
             adjustment=adjustment,
+            listing=provider_listing(conf, qlib_dir, fetch=False),
         )
         print(f"Qlib dataset created: {qlib_dir}")
         print(f"Dataset manifest created: {manifest_path}")

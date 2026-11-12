@@ -1,0 +1,146 @@
+"""Keep year-end listing masters for a provider: fetch the missing ones and write the provider files."""
+
+from __future__ import annotations
+
+import datetime as dt
+import hashlib
+import shutil
+import time
+import uuid
+from collections.abc import Callable, Iterable
+from pathlib import Path
+from typing import Any
+
+from .fetch_listing import fetch_year_end_listing
+from .listing import ListingError, completed_year_ends, listing_document
+from .store_listing import raw_listing_path, read_raw_listing, write_raw_listing
+
+LISTING_SUBTREE = "listing"
+LISTING_MANIFEST_SCHEMA_VERSION = 1
+REASON_NOT_STORED = "not_stored"
+REASON_UNREADABLE = "unreadable"
+REASON_FETCH_FAILED = "fetch_failed"
+_SCRATCH_PREFIXES = (f".{LISTING_SUBTREE}.tmp-", f".{LISTING_SUBTREE}.old-")
+
+
+def provider_sessions(qlib_dir: Path) -> list[dt.date]:
+    """Return the sessions in the provider's day calendar, or none when the provider has no calendar."""
+    calendar = Path(qlib_dir) / "calendars" / "day.txt"
+    if not calendar.is_file():
+        return []
+    lines = calendar.read_text(encoding="utf-8").splitlines()
+    return [dt.date.fromisoformat(line.strip()) for line in lines if line.strip()]
+
+
+def target_year_ends(sessions: Iterable[dt.date], first_year: int | None) -> list[dt.date]:
+    """Return the candidate year ends of the finished years in ``sessions``, from ``first_year`` on, oldest first."""
+    return [
+        day
+        for year, day in completed_year_ends(sessions).items()
+        if first_year is None or year >= first_year
+    ]
+
+
+def fetch_missing_year_ends(
+    client: Any,
+    days: Iterable[dt.date],
+    raw_dir: Path,
+    *,
+    request_interval_sec: float,
+    retries: int,
+    retry_base_delay_sec: float,
+    retry_max_delay_sec: float,
+    retry_jitter_sec: float,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> dict[dt.date, str]:
+    """Fetch and store every day of ``days`` that has no stored file; return the failures by day.
+
+    A day with a stored file is not requested again, even when the file is unreadable: a stored day is
+    never replaced. One day's failure (a refused response, a network or authentication error) does not
+    stop the others; its value names the exception type.
+    """
+    failures: dict[dt.date, str] = {}
+    for day in days:
+        if raw_listing_path(raw_dir, day).exists() or raw_listing_path(raw_dir, day).is_symlink():
+            continue
+        try:
+            listing = fetch_year_end_listing(
+                client,
+                day,
+                request_interval_sec=request_interval_sec,
+                retries=retries,
+                retry_base_delay_sec=retry_base_delay_sec,
+                retry_max_delay_sec=retry_max_delay_sec,
+                retry_jitter_sec=retry_jitter_sec,
+                sleeper=sleeper,
+            )
+            write_raw_listing(raw_dir, listing)
+        except Exception as exc:
+            failures[day] = type(exc).__name__
+    return failures
+
+
+def _remove_scratch(provider: Path) -> None:
+    for entry in provider.iterdir():
+        if entry.name.startswith(_SCRATCH_PREFIXES):
+            shutil.rmtree(entry, ignore_errors=True)
+
+
+def write_provider_listings(
+    raw_dir: Path,
+    qlib_dir: Path,
+    days: Iterable[dt.date],
+    fetch_failures: dict[dt.date, str] | None = None,
+) -> dict[str, Any]:
+    """Rebuild ``<qlib_dir>/listing`` from the stored responses and return the manifest block describing it.
+
+    Each day of ``days`` whose stored response passes ``read_raw_listing`` becomes
+    ``listing/<YYYY-MM-DD>.json`` (the ``listing_document`` bytes). The subtree is replaced as a whole,
+    so it holds exactly the files the block lists; with no usable day it is removed. A day without a
+    usable file is listed under ``unavailable`` with ``not_stored``, ``unreadable`` or, when
+    ``fetch_failures`` names it, ``fetch_failed`` and the exception type.
+    """
+    provider = Path(qlib_dir).resolve()
+    provider.mkdir(parents=True, exist_ok=True)
+    ordered = sorted(set(days))
+    staged = provider / f".{LISTING_SUBTREE}.tmp-{uuid.uuid4().hex}"
+    staged.mkdir()
+    files: list[dict[str, Any]] = []
+    unavailable: list[dict[str, str]] = []
+    try:
+        for day in ordered:
+            try:
+                document = listing_document(read_raw_listing(raw_dir, day).rows, requested=day)
+            except ListingError:
+                stored = raw_listing_path(raw_dir, day)
+                if stored.exists() or stored.is_symlink():
+                    unavailable.append({"day": day.isoformat(), "reason": REASON_UNREADABLE})
+                elif fetch_failures and day in fetch_failures:
+                    unavailable.append(
+                        {"day": day.isoformat(), "reason": REASON_FETCH_FAILED, "error": fetch_failures[day]}
+                    )
+                else:
+                    unavailable.append({"day": day.isoformat(), "reason": REASON_NOT_STORED})
+                continue
+            (staged / f"{day.isoformat()}.json").write_bytes(document)
+            files.append(
+                {
+                    "day": day.isoformat(),
+                    "path": f"{LISTING_SUBTREE}/{day.isoformat()}.json",
+                    "sha256": hashlib.sha256(document).hexdigest(),
+                }
+            )
+        current = provider / LISTING_SUBTREE
+        retired = provider / f".{LISTING_SUBTREE}.old-{uuid.uuid4().hex}"
+        if current.exists() or current.is_symlink():
+            current.rename(retired)
+        if files:
+            staged.rename(current)
+    finally:
+        _remove_scratch(provider)
+    return {
+        "schema_version": LISTING_MANIFEST_SCHEMA_VERSION,
+        "target_days": [day.isoformat() for day in ordered],
+        "files": files,
+        "unavailable": unavailable,
+    }

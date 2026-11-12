@@ -111,8 +111,12 @@ security find-generic-password -s jquants-api-key >/dev/null && echo present || 
 | `fundamentals.retry_max_delay_sec` | `8.0` | 財務 API の待機上限秒 |
 | `fundamentals.retry_jitter_sec` | `0.3` | 財務 API のジッター秒 |
 | `fundamentals.request_interval_sec` | `1.1` | 財務 API のリクエスト間隔秒 |
+| `listing.enabled` | `false` | 年末時点の上場銘柄一覧を保存し、provider の `listing/` に置くか。`false` なら API を呼ばず、何も読み書きしない |
+| `listing.raw_dir` | `./data/listing_raw` | 取得した応答を基準日ごとに 1 度だけ保存する場所。Git の管理の外に置く |
+| `listing.first_year` | なし | 対象にする最初の年。省略すると、provider のカレンダーにある終わった年の全部 |
 
-表に無いキーが YAML に残っていても、エラーにはならず単に無視されます。財務データの
+表に無いキーが YAML に残っていても、エラーにはならず単に無視されます。ただし `listing` の中の知らないキーは
+エラーになります（`enabled` の書き間違いで、無効のまま動くことを防ぐためです）。財務データの
 設定例は [実験的な財務パイプライン](fundamentals.md) を参照してください。
 
 ## 環境変数
