@@ -8,6 +8,11 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
 
 ### Added
 
+- `jqqlib.listing` holds the pure rules for a point-in-time listing master: `completed_year_ends` and
+  `confirm_year_end` settle the last session of a finished year, `normalize_listing` refuses a response
+  that is empty, dated other than the requested day, repeats a code or carries an unknown market or
+  product code, and `listing_document` serialises the checked rows (code, market, product category only)
+  as canonical JSON. Nothing fetches or writes a listing yet.
 - `convert`, `bootstrap-csv`, `run-all`, `run-daily`, `publish` and `run-etl` (which writes the
   provider's source Parquet) hold an exclusive lock on the provider for the whole command, in `.<name>.write.lock` beside the provider. When another
   process holds it, the command exits 75 at once and leaves the provider unchanged.
