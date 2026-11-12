@@ -85,7 +85,8 @@ def load_config(path: Path) -> dict:
     or ``qlib`` section that is not a mapping, a ``publish_check`` section that is neither a mapping nor empty, a
     missing or invalid storage path, an unknown ``qlib.adjustment``, an invalid ``git_ref``, an unknown
     ``publish_check.baseline``, an invalid ``publish_check.ledger_path``, a ``file`` baseline without one, an
-    invalid ``listing`` section or a ``listing.raw_dir`` inside ``storage.qlib_dir``. An unhashable
+    invalid ``listing`` section or, with the listing enabled, a ``listing.raw_dir`` inside
+    ``storage.qlib_dir``. An unhashable
     ``qlib.adjustment`` such as a list raises ``TypeError``.
     """
     import yaml
@@ -125,9 +126,10 @@ def load_config(path: Path) -> dict:
     baseline = publish_check_baseline(config)
     if baseline == PUBLISH_CHECK_BASELINE_FILE or publish_check.get("ledger_path") is not None:
         publish_check_ledger_path(config)
-    listing_raw_dir = listing_config(config).raw_dir.resolve()
+    listing = listing_config(config)
+    listing_raw_dir = listing.raw_dir.resolve()
     provider_dir = Path(config["storage"]["qlib_dir"]).resolve()
-    if listing_raw_dir == provider_dir or provider_dir in listing_raw_dir.parents:
+    if listing.enabled and (listing_raw_dir == provider_dir or provider_dir in listing_raw_dir.parents):
         raise ValueError(
             "listing.raw_dir must be outside storage.qlib_dir; a provider build replaces its listing files."
         )

@@ -194,7 +194,8 @@ def provider_listing(config: dict, qlib_dir: Path, *, fetch: bool) -> dict[str, 
     With ``listing.enabled`` false nothing is requested. A ``listing`` subtree is removed when the
     manifest still in ``qlib_dir`` records every file in it, which shows that an earlier enabled build
     wrote it; any other ``listing`` entry is left as it is, with a warning, and the stored responses
-    are never touched. Otherwise the year ends of the
+    are never touched; a failure to examine or remove it is a warning too and never fails the build.
+    Otherwise the year ends of the
     finished years in the provider calendar are the targets. ``fetch`` asks the API for the targets that
     have no stored response; a failure there, including a missing credential, is logged and recorded in
     the block and never raised, and so is a stored response that cannot be read, so the price build it
@@ -202,7 +203,15 @@ def provider_listing(config: dict, qlib_dir: Path, *, fetch: bool) -> dict[str, 
     """
     listing = listing_config(config)
     if not listing.enabled:
-        outcome = remove_recorded_listings(qlib_dir, _recorded_listing_files(qlib_dir))
+        try:
+            outcome = remove_recorded_listings(qlib_dir, _recorded_listing_files(qlib_dir))
+        except OSError as exc:
+            logger.warning(
+                "Listing is disabled and the listing entry in %s could not be examined or removed (%s); "
+                "the new manifest does not record it.",
+                qlib_dir, type(exc).__name__,
+            )
+            return None
         if outcome == LISTING_REMOVED:
             logger.warning("Listing is disabled; removed the listing subtree the previous build recorded.")
         elif outcome == LISTING_KEPT:

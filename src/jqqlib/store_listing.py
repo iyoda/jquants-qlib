@@ -117,18 +117,39 @@ def read_raw_listing(raw_dir: Path, day: dt.date) -> YearEndListing:
     """Load the stored response for ``day`` and apply the checks a fresh response must pass.
 
     Raises ``ListingError`` when the file is absent, cannot be read, is not the stored shape, names
-    another day, or does not pass ``normalize_listing`` and ``confirm_year_end``. These are consistency checks: an
-    edit that keeps the file consistent (a removed row, another known market code) is not detected.
+    another day, or does not pass ``normalize_listing`` and ``confirm_year_end``. These are consistency
+    checks: an edit that keeps the file consistent (a removed row, another known market code) is not
+    detected.
     """
+    return _checked(_stored_bytes(raw_dir, day), raw_listing_path(raw_dir, day), day)
+
+
+def checked_raw_listing_bytes(raw_dir: Path, day: dt.date) -> bytes:
+    """Return the stored file for ``day`` as the exact bytes that passed ``read_raw_listing``'s checks.
+
+    The file is read once, so a copy made from the result is the content that was checked even when
+    the file changes afterwards. Raises ``ListingError`` as ``read_raw_listing`` does.
+    """
+    data = _stored_bytes(raw_dir, day)
+    _checked(data, raw_listing_path(raw_dir, day), day)
+    return data
+
+
+def _stored_bytes(raw_dir: Path, day: dt.date) -> bytes:
     path = raw_listing_path(raw_dir, day)
     try:
-        document = json.loads(path.read_bytes())
+        return path.read_bytes()
     except FileNotFoundError as exc:
         raise ListingError(f"no stored listing for {day}") from exc
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ListingError(f"{path.name} is not valid JSON") from exc
     except OSError as exc:
         raise ListingError(f"{path.name} cannot be read ({type(exc).__name__})") from exc
+
+
+def _checked(data: bytes, path: Path, day: dt.date) -> YearEndListing:
+    try:
+        document = json.loads(data)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ListingError(f"{path.name} is not valid JSON") from exc
     if (
         not isinstance(document, dict)
         or set(document) != _RAW_KEYS

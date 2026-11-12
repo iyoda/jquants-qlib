@@ -115,20 +115,30 @@ class ListingConfigTests(unittest.TestCase):
     def test_load_config_refuses_a_listing_store_inside_the_provider(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "config.yaml"
+            storage = f'storage:\n  parquet_dir: "{tmpdir}/p"\n  qlib_dir: "{tmpdir}/q"\n'
             for raw_dir in ("q", "q/listing", "q/listing/raw"):
-                path.write_text(
-                    f'storage:\n  parquet_dir: "{tmpdir}/p"\n  qlib_dir: "{tmpdir}/q"\n'
-                    f'listing:\n  raw_dir: "{tmpdir}/{raw_dir}"\n',
-                    encoding="utf-8",
-                )
+                inside = f'  raw_dir: "{tmpdir}/{raw_dir}"\n'
+                path.write_text(storage + "listing:\n  enabled: true\n" + inside, encoding="utf-8")
                 with self.subTest(raw_dir=raw_dir), self.assertRaisesRegex(ValueError, "outside storage.qlib_dir"):
                     load_config(path)
+                path.write_text(storage + "listing:\n" + inside, encoding="utf-8")
+                load_config(path)
             path.write_text(
-                f'storage:\n  parquet_dir: "{tmpdir}/p"\n  qlib_dir: "{tmpdir}/q"\n'
-                f'listing:\n  raw_dir: "{tmpdir}/q_listing_raw"\n',
-                encoding="utf-8",
+                storage + f'listing:\n  enabled: true\n  raw_dir: "{tmpdir}/q_listing_raw"\n', encoding="utf-8"
             )
             load_config(path)
+
+    def test_load_config_accepts_a_provider_that_holds_the_default_store_while_the_listing_is_off(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "config.yaml"
+            path.write_text('storage:\n  parquet_dir: "./data/parquet"\n  qlib_dir: "./data"\n', encoding="utf-8")
+            load_config(path)
+            path.write_text(
+                'storage:\n  parquet_dir: "./data/parquet"\n  qlib_dir: "./data"\nlisting:\n  enabled: true\n',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "outside storage.qlib_dir"):
+                load_config(path)
 
     def test_load_config_refuses_a_malformed_listing_section(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -381,6 +391,19 @@ class ProviderListingTests(_Workspace):
                     for path in sorted(self.root.rglob("*"))
                 }
                 self.assertEqual(after, before)
+
+    def test_disabled_leaves_an_empty_listing_directory_alone_without_a_warning(self) -> None:
+        (self.qlib_dir / "listing").mkdir()
+        with self.assertNoLogs("jqqlib", level="WARNING"):
+            self.assertIsNone(pipeline.provider_listing({}, self.qlib_dir, fetch=True))
+        self.assertEqual(self.provider_entries(), ["calendars", "listing"])
+
+    def test_disabled_survives_a_listing_entry_that_cannot_be_removed(self) -> None:
+        self._enabled_build()
+        with mock.patch("jqqlib.listing_sync.shutil.rmtree", side_effect=PermissionError("denied")):
+            with self.assertLogs("jqqlib", level="WARNING") as logs:
+                self.assertIsNone(pipeline.provider_listing({}, self.qlib_dir, fetch=True))
+        self.assertIn("could not be examined or removed (PermissionError)", logs.output[0])
 
     def test_enabled_with_fetch_stores_and_writes_the_targets_from_first_year_on(self) -> None:
         client = _Client()

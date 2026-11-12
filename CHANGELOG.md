@@ -27,7 +27,10 @@ Version and compatibility policy: [Releasing](docs/releasing.md).
   or written and the manifest is unchanged; a `listing/` subtree is removed, with a warning, when
   the manifest still in the provider records every file in it, so that a disabled build leaves no
   listing file the new manifest does not record. Any other `listing` entry is left as it is, with a
-  warning. `listing.raw_dir` inside `storage.qlib_dir` is a configuration error. New keys: `listing.raw_dir` (default `./data/listing_raw`) and `listing.first_year`.
+  warning, and so is one that cannot be examined or removed. With the listing enabled,
+  `listing.raw_dir` inside `storage.qlib_dir` is a configuration error.
+- `checked_raw_listing_bytes` returns the stored listing file as the exact bytes that passed the
+  checks, read once, for a caller that copies it. New keys: `listing.raw_dir` (default `./data/listing_raw`) and `listing.first_year`.
 - `convert`, `bootstrap-csv`, `run-all`, `run-daily`, `publish` and `run-etl` (which writes the
   provider's source Parquet) hold an exclusive lock on the provider for the whole command, in `.<name>.write.lock` beside the provider. When another
   process holds it, the command exits 75 at once and leaves the provider unchanged.

@@ -403,8 +403,10 @@ manifest の SHA-256 の対象に入りますが、`dataset_id` には入れて�
 消してよいのは、この処理が書いたと示せるものだけです。「manifest に無い」ことは、「消してよい」ことの根拠に
 なりません。そこで、provider に残っている前の manifest が、`listing/` の全部のファイルを SHA-256 つきで
 記録している場合にだけ消します（`remove_recorded_listings`）。利用者が自分で置いた `listing`、記録と違う
-ファイル、ディレクトリでない `listing` は、消さずに警告を出します。同じ理由で、`listing.raw_dir` を
-`storage.qlib_dir` の中に置く設定は拒否します。有効な build は `listing/` を全体として置き換えるので、
+ファイル、ディレクトリでない `listing` は、消さずに警告を出します。調べることや消すことに失敗した場合も、
+警告だけにして、株価の build は続けます。同じ理由で、有効のときに `listing.raw_dir` を `storage.qlib_dir` の
+中に置く設定は拒否します。無効のときは検査しません。`listing` の節が無い既存の設定で、provider の場所が
+保存先の既定値を含んでいても、今までどおり動かすためです。有効な build は `listing/` を全体として置き換えるので、
 そこに保存先があると、取り直せない応答を消してしまうためです。
 
 - 名前: `provider_listing`、`fetch_missing_year_ends`、`write_provider_listings`、`target_year_ends`、

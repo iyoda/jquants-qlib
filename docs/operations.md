@@ -364,7 +364,7 @@ API を呼びません。provider に `listing` が無ければ、provider と m
   警告を出します。その `listing` は、新しい manifest には記録されません。
 - `listing.raw_dir` の保存済みの応答は消しません。もう一度有効にすると、保存済みの基準日については API を
   呼ばずに `listing/` を作り直します。
-- `listing.raw_dir` は、`storage.qlib_dir` の外に置きます。中に置いた設定は、設定エラーになります。provider を
+- `listing.raw_dir` は、`storage.qlib_dir` の外に置きます。有効のときに中に置いた設定は、設定エラーになります。provider を
   作る処理が `listing/` を置き換えるためです。
 
 ## 日次運用
