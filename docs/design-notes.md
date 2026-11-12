@@ -297,6 +297,39 @@ PIT の規則そのものは [財務](fundamentals.md#pitpoint-in-timeの意味)
   `test_a_later_disc_time_outranks_an_earlier_keyed_one_even_without_disc_no`、
   `test_disc_no_with_non_ascii_digits_is_not_a_usable_key`
 
+## 上場銘柄一覧（`listing.py`）
+
+### 年末の基準日は、株価のカレンダーだけでは決めない
+
+年末時点の銘柄一覧を取るには、その年の最後の営業日を知る必要があります。取得済みの株価から作ったカレンダーの
+「その年の最後の日」を使うと、最終日の株価が欠けているときに、1 つ前の営業日を年末と取り違えます。その日を
+API に要求しても、応答の日付は要求と一致するので、日付の一致の検査では見つけられません。
+
+そこで 2 段階にしています。`completed_year_ends` は、翌年の営業日がカレンダーにある年だけを対象に、候補の日を
+返します。`confirm_year_end` は、候補の翌日（暦の日付）を API に要求したときの応答の日付を受け取り、それが
+翌年でなければ拒否します。API は休業日の要求に翌営業日の一覧を返すので、翌営業日が翌年なら、候補より後に
+その年の営業日はありません。
+
+- 名前: `completed_year_ends`、`confirm_year_end`、`ListingError`
+- テスト: `tests/test_listing.py` の
+  `test_a_missing_final_session_yields_an_earlier_candidate_that_only_confirmation_rejects`
+
+### 応答は、要求した日付と一致する行だけを受け入れる
+
+API は、休業日や未来の日付の要求に、別の日の一覧を返します。基準日より後の一覧を基準日のものとして保存すると、
+利用者は未来の情報で銘柄を選ぶことになります。`normalize_listing` は、全部の行の日付が要求と一致することを
+求め、前の日付でも後の日付でも拒否します。空の応答、必須の項目の欠け、重複した銘柄コード、公開されている
+区分表に無い市場区分・商品区分も拒否します。新しい区分が増えたときに、意味の分からない行を黙って通さない
+ためです。
+
+出力に残すのは、銘柄コード、市場区分、商品区分だけです。会社名や業種は、応答にあっても落とします。
+`listing_document` は、行の順序が違っても同じバイト列を返します。
+
+- 名前: `normalize_listing`、`listing_document`、`KNOWN_PRODUCT_CATEGORIES`、`KNOWN_MARKET_CODES`
+- テスト: `tests/test_listing.py` の
+  `test_a_response_dated_other_than_requested_is_refused_in_both_directions`、
+  `test_only_code_market_and_product_category_survive`、`test_row_order_does_not_change_the_bytes`
+
 ## スクリプト（`scripts/`）
 
 - `check_comments.py`: CONTRIBUTING の規約を検査します。`src/jqqlib` と `scripts` の外のパスと、存在しない
