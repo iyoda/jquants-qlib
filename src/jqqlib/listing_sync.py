@@ -128,7 +128,8 @@ def remove_recorded_listings(qlib_dir: Path, recorded: Mapping[str, str]) -> str
     subtree lists them. Returns ``"absent"`` when there is no ``listing`` entry, ``"removed"`` when
     the subtree was a real directory holding only recorded files with those hashes, and ``"kept"``
     otherwise: something this package cannot show it wrote is never deleted. An empty directory has
-    nothing to show and counts as absent.
+    nothing to show and counts as absent. The files are deleted in place, so a deletion that fails
+    part way raises ``OSError`` and leaves the rest under ``listing``.
     """
     provider = Path(qlib_dir).resolve()
     current = provider / LISTING_SUBTREE
@@ -145,9 +146,9 @@ def remove_recorded_listings(qlib_dir: Path, recorded: Mapping[str, str]) -> str
         expected = recorded.get(f"{LISTING_SUBTREE}/{entry.name}")
         if expected is None or hashlib.sha256(entry.read_bytes()).hexdigest() != expected:
             return LISTING_KEPT
-    retired = provider / f".{LISTING_SUBTREE}.old-{uuid.uuid4().hex}"
-    current.rename(retired)
-    shutil.rmtree(retired)
+    for entry in entries:
+        entry.unlink()
+    current.rmdir()
     return LISTING_REMOVED
 
 

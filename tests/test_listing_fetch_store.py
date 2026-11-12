@@ -147,13 +147,18 @@ class RawListingStoreTests(unittest.TestCase):
             write_raw_listing(self.raw_dir, changed)
         self.assertEqual(path.read_bytes(), before)
 
-    def test_checked_bytes_are_the_stored_file_and_a_damaged_file_gives_none(self) -> None:
+    def test_checked_bytes_are_the_stored_file_and_an_absent_or_inconsistent_file_is_refused(self) -> None:
         path = write_raw_listing(self.raw_dir, _listing())
-        self.assertEqual(checked_raw_listing_bytes(self.raw_dir, YEAR_END), path.read_bytes())
+        good = path.read_bytes()
+        self.assertEqual(checked_raw_listing_bytes(self.raw_dir, YEAR_END), good)
+        document = json.loads(good)
+        document["confirmation"]["effective_date"] = "2031-12-31"
+        for damaged in (b"{not json", json.dumps(document).encode()):
+            path.unlink()
+            path.write_bytes(damaged)
+            with self.subTest(damaged=damaged[:12]), self.assertRaises(ListingError):
+                checked_raw_listing_bytes(self.raw_dir, YEAR_END)
         path.unlink()
-        with self.assertRaises(ListingError):
-            checked_raw_listing_bytes(self.raw_dir, YEAR_END)
-        path.write_bytes(b"{not json")
         with self.assertRaises(ListingError):
             checked_raw_listing_bytes(self.raw_dir, YEAR_END)
 
