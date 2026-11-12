@@ -12,6 +12,7 @@ import json
 import math
 import re
 from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 
 LISTING_DOCUMENT_SCHEMA = 1
 KNOWN_PRODUCT_CATEGORIES = frozenset({"011", "012", "013", "014", "021", "022", "023", "024"})
@@ -48,6 +49,35 @@ def _as_day(value: object, what: str) -> dt.date:
         except ValueError as exc:
             raise ListingError(f"{what}: {value!r} is not a calendar day") from exc
     raise ListingError(f"{what}: {value!r} is not a day")
+
+
+@dataclass(frozen=True)
+class YearEndListing:
+    """One year-end master response together with the evidence that its day is the year end.
+
+    ``rows`` is the response for ``day`` as received, every field included. ``confirmation_effective``
+    is the date the API put on the master requested for ``confirmation_requested``, the day after.
+    """
+
+    day: dt.date
+    confirmation_requested: dt.date
+    confirmation_effective: dt.date
+    rows: tuple[Mapping[str, object], ...]
+
+
+def single_effective_day(rows: Iterable[Mapping[str, object]]) -> dt.date:
+    """Return the one ``Date`` every row of a master response carries.
+
+    Raises ``ListingError`` for an empty response, a missing ``Date``, or rows dated differently.
+    """
+    days = set()
+    for position, row in enumerate(rows):
+        if _is_missing(row.get("Date")):
+            raise ListingError(f"row {position}: Date is missing")
+        days.add(_as_day(row.get("Date"), f"row {position}: Date"))
+    if len(days) != 1:
+        raise ListingError(f"expected one effective date, got {sorted(day.isoformat() for day in days)}")
+    return days.pop()
 
 
 def completed_year_ends(sessions: Iterable[dt.date]) -> dict[int, dt.date]:

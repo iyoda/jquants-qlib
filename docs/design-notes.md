@@ -342,6 +342,38 @@ API は、休業日や未来の日付の要求に、別の日の一覧を返し�
   `test_codes_that_are_not_text_exactly_as_published_are_refused`、
   `test_only_code_market_and_product_category_survive`、`test_row_order_does_not_change_the_bytes`
 
+### 取得した応答は、基準日ごとに 1 度だけ保存する
+
+API の履歴は、契約のプランによって、さかのぼれる範囲が決まっています。範囲から外れた年末の一覧は、取り直せ
+ません。そこで、検査を通った応答を、項目を落とさずに基準日ごとの 1 ファイルとして保存します。株価の保存
+（上書きや置き換えがある）とは別にしています。
+
+`write_raw_listing` は、保存済みの基準日を書き換えません。同じ応答なら何もせず、違う応答なら拒否して、保存
+済みのファイルを残します。最初に検査を通した写しを、後の作り直しが再現する対象にするためです。API が後から
+訂正したデータは取り込みません。
+
+ファイルは、一時的な名前で書き終えてから、ハードリンクで最終の名前をつけます。`os.replace` は、すでにある
+ファイルを黙って置き換えるので使いません。2 つのプロセスが同時に「まだ保存されていない」と判断しても、
+ハードリンクは後のほうが失敗するので、先に保存された写しが残ります。ファイルの中身と、ディレクトリの
+エントリの両方を、ディスクに書き出してから戻ります。
+
+保存の前と、`read_raw_listing` で読んだ後の両方で、取得のときと同じ検査を行います。保存の形と、これらの
+規則に合わないファイルからは、文書を作りません。ただし、これは整合性の検査です。行を 1 つ消す、市場区分を
+別の既知の値に変える、といった、規則に合ったままの書き換えは見つけられません。それを見つけるには、別の場所に
+置いた保存時のハッシュとの照合が要ります。`stored_listing_days` は名前だけを見るので、その日を使えるか
+どうかは、`read_raw_listing` が受け入れるかどうかで決めます。
+
+`fetch_year_end_listing` は、候補の日の応答が検査を通ってから、翌日を要求します。候補が休業日なら、2 回目の
+要求をせずに止まります。年末の確認に使った要求と応答の日付も、一緒に保存します。
+
+- 名前: `fetch_year_end_listing`、`fetch_listing_master`、`single_effective_day`、`YearEndListing`、
+  `write_raw_listing`、`read_raw_listing`、`stored_listing_days`
+- テスト: `tests/test_listing_fetch_store.py` の
+  `test_a_candidate_answered_with_another_day_is_refused_before_the_confirmation_request`、
+  `test_a_different_response_for_a_stored_day_is_refused_and_the_file_is_kept`、
+  `test_a_writer_that_loses_the_race_does_not_replace_the_stored_file`、
+  `test_reading_refuses_an_absent_damaged_or_tampered_file`
+
 ## スクリプト（`scripts/`）
 
 - `check_comments.py`: CONTRIBUTING の規約を検査します。`src/jqqlib` と `scripts` の外のパスと、存在しない
