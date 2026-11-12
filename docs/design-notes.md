@@ -400,10 +400,19 @@ manifest の SHA-256 の対象に入りますが、`dataset_id` には入れて�
 `listing` が無いので、残すと、記録の無いファイルが provider にあることになるためです。保存済みの応答は
 残すので、有効に戻せば作り直せます。
 
+消してよいのは、この処理が書いたと示せるものだけです。「manifest に無い」ことは、「消してよい」ことの根拠に
+なりません。そこで、provider に残っている前の manifest が、`listing/` の全部のファイルを SHA-256 つきで
+記録している場合にだけ消します（`remove_recorded_listings`）。利用者が自分で置いた `listing`、記録と違う
+ファイル、ディレクトリでない `listing` は、消さずに警告を出します。同じ理由で、`listing.raw_dir` を
+`storage.qlib_dir` の中に置く設定は拒否します。有効な build は `listing/` を全体として置き換えるので、
+そこに保存先があると、取り直せない応答を消してしまうためです。
+
 - 名前: `provider_listing`、`fetch_missing_year_ends`、`write_provider_listings`、`target_year_ends`、
   `listing_config`
-- テスト: `tests/test_listing_sync.py` の `test_disabled_requests_reads_and_writes_nothing`、
-  `test_disabled_removes_a_subtree_an_earlier_build_left_and_keeps_the_stored_responses`、
+- テスト: `tests/test_listing_sync.py` の `test_disabled_without_a_listing_entry_requests_and_writes_nothing`、
+  `test_disabled_removes_the_subtree_the_previous_manifest_records_and_keeps_the_stored_responses`、
+  `test_disabled_keeps_a_listing_entry_the_previous_manifest_does_not_fully_record`、
+  `test_load_config_refuses_a_listing_store_inside_the_provider`、
   `test_a_missing_credential_is_recorded_and_not_raised`、
   `test_one_failing_day_is_reported_and_does_not_stop_the_others`、
   `test_a_file_that_is_no_longer_a_target_is_removed`、

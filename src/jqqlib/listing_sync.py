@@ -8,7 +8,7 @@ import os
 import shutil
 import time
 import uuid
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +22,9 @@ LISTING_MANIFEST_SCHEMA_VERSION = 1
 REASON_NOT_STORED = "not_stored"
 REASON_UNREADABLE = "unreadable"
 REASON_FETCH_FAILED = "fetch_failed"
+LISTING_ABSENT = "absent"
+LISTING_REMOVED = "removed"
+LISTING_KEPT = "kept"
 _SCRATCH_PREFIXES = (f".{LISTING_SUBTREE}.tmp-", f".{LISTING_SUBTREE}.old-")
 
 
@@ -118,20 +121,30 @@ def _replace_subtree(provider: Path, staged: Path, *, keep: bool) -> None:
         shutil.rmtree(retired, ignore_errors=True)
 
 
-def remove_provider_listings(qlib_dir: Path) -> bool:
-    """Remove ``<qlib_dir>/listing`` and report whether there was one.
+def remove_recorded_listings(qlib_dir: Path, recorded: Mapping[str, str]) -> str:
+    """Remove ``<qlib_dir>/listing`` when every file in it is one ``recorded`` names; say what was done.
 
-    A build made with the listing disabled records no listing in its manifest, so a subtree left by an
-    earlier build would be in the provider without a record. Stored responses are not touched.
+    ``recorded`` maps provider-relative paths to SHA-256, as the manifest of the build that wrote the
+    subtree lists them. Returns ``"absent"`` when there is no ``listing`` entry, ``"removed"`` when
+    the subtree was a real directory holding only recorded files with those hashes, and ``"kept"``
+    otherwise: something this package cannot show it wrote is never deleted.
     """
     provider = Path(qlib_dir).resolve()
     current = provider / LISTING_SUBTREE
     if not os.path.lexists(current):
-        return False
+        return LISTING_ABSENT
+    if current.is_symlink() or not current.is_dir():
+        return LISTING_KEPT
+    for entry in current.iterdir():
+        if entry.is_symlink() or not entry.is_file():
+            return LISTING_KEPT
+        expected = recorded.get(f"{LISTING_SUBTREE}/{entry.name}")
+        if expected is None or hashlib.sha256(entry.read_bytes()).hexdigest() != expected:
+            return LISTING_KEPT
     retired = provider / f".{LISTING_SUBTREE}.old-{uuid.uuid4().hex}"
     current.rename(retired)
-    shutil.rmtree(retired, ignore_errors=True)
-    return True
+    shutil.rmtree(retired)
+    return LISTING_REMOVED
 
 
 def write_provider_listings(

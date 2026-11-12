@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime as dt
 import hashlib
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -110,6 +111,24 @@ class ListingConfigTests(unittest.TestCase):
         for section in sections:
             with self.subTest(section=section), self.assertRaises(ValueError):
                 listing_config({"listing": section})
+
+    def test_load_config_refuses_a_listing_store_inside_the_provider(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "config.yaml"
+            for raw_dir in ("q", "q/listing", "q/listing/raw"):
+                path.write_text(
+                    f'storage:\n  parquet_dir: "{tmpdir}/p"\n  qlib_dir: "{tmpdir}/q"\n'
+                    f'listing:\n  raw_dir: "{tmpdir}/{raw_dir}"\n',
+                    encoding="utf-8",
+                )
+                with self.subTest(raw_dir=raw_dir), self.assertRaisesRegex(ValueError, "outside storage.qlib_dir"):
+                    load_config(path)
+            path.write_text(
+                f'storage:\n  parquet_dir: "{tmpdir}/p"\n  qlib_dir: "{tmpdir}/q"\n'
+                f'listing:\n  raw_dir: "{tmpdir}/q_listing_raw"\n',
+                encoding="utf-8",
+            )
+            load_config(path)
 
     def test_load_config_refuses_a_malformed_listing_section(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -285,7 +304,7 @@ class ProviderListingTests(_Workspace):
     def config(self, **listing: object) -> dict[str, Any]:
         return {"listing": {"raw_dir": str(self.raw_dir), **listing}}
 
-    def test_disabled_requests_reads_and_writes_nothing(self) -> None:
+    def test_disabled_without_a_listing_entry_requests_and_writes_nothing(self) -> None:
         with mock.patch.object(pipeline, "create_jquants_client") as create_client:
             for fetch in (True, False):
                 self.assertIsNone(pipeline.provider_listing(self.config(enabled=False), self.qlib_dir, fetch=fetch))
@@ -294,17 +313,74 @@ class ProviderListingTests(_Workspace):
         self.assertEqual(self.provider_entries(), ["calendars"])
         self.assertFalse(self.raw_dir.exists())
 
-    def test_disabled_removes_a_subtree_an_earlier_build_left_and_keeps_the_stored_responses(self) -> None:
+    def _enabled_build(self) -> dict[str, bytes]:
         fetch_missing_year_ends(_Client(), YEAR_ENDS, self.raw_dir, **RETRY)
-        write_provider_listings(self.raw_dir, self.qlib_dir, YEAR_ENDS)
-        stored = sorted(path.name for path in self.raw_dir.iterdir())
+        block = write_provider_listings(self.raw_dir, self.qlib_dir, YEAR_ENDS)
+        (self.qlib_dir / "dataset_manifest.json").write_text(json.dumps({"listing": block}), encoding="utf-8")
+        return {path.name: path.read_bytes() for path in self.raw_dir.iterdir()}
+
+    def test_disabled_removes_the_subtree_the_previous_manifest_records_and_keeps_the_stored_responses(self) -> None:
+        stored = self._enabled_build()
         with self.assertLogs("jqqlib", level="WARNING") as logs:
             self.assertIsNone(pipeline.provider_listing(self.config(enabled=False), self.qlib_dir, fetch=True))
         self.assertEqual(len(logs.records), 1)
-        self.assertEqual(self.provider_entries(), ["calendars"])
-        self.assertEqual(sorted(path.name for path in self.raw_dir.iterdir()), stored)
+        self.assertEqual(self.provider_entries(), ["calendars", "dataset_manifest.json"])
+        self.assertEqual({path.name: path.read_bytes() for path in self.raw_dir.iterdir()}, stored)
         with self.assertNoLogs("jqqlib", level="WARNING"):
             self.assertIsNone(pipeline.provider_listing(self.config(enabled=False), self.qlib_dir, fetch=True))
+
+    def test_disabled_keeps_a_listing_entry_the_previous_manifest_does_not_fully_record(self) -> None:
+        def unrecorded_file() -> None:
+            (self.qlib_dir / "listing" / "notes.json").write_text("{}", encoding="utf-8")
+
+        def changed_file() -> None:
+            (self.qlib_dir / "listing" / "2030-12-30.json").write_text("{}", encoding="utf-8")
+
+        def nested_directory() -> None:
+            (self.qlib_dir / "listing" / "mine").mkdir()
+
+        def no_manifest() -> None:
+            (self.qlib_dir / "dataset_manifest.json").unlink()
+
+        def unreadable_manifest() -> None:
+            (self.qlib_dir / "dataset_manifest.json").write_text("{not json", encoding="utf-8")
+
+        def manifest_without_a_block() -> None:
+            (self.qlib_dir / "dataset_manifest.json").write_text("{}", encoding="utf-8")
+
+        def a_plain_file() -> None:
+            shutil.rmtree(self.qlib_dir / "listing")
+            (self.qlib_dir / "listing").write_text("mine", encoding="utf-8")
+
+        def a_symlink_to_an_identical_directory() -> None:
+            (self.qlib_dir / "listing").rename(self.root / "elsewhere")
+            (self.qlib_dir / "listing").symlink_to(self.root / "elsewhere", target_is_directory=True)
+
+        def a_recorded_name_that_is_a_symlink_to_identical_bytes() -> None:
+            recorded = self.qlib_dir / "listing" / "2030-12-30.json"
+            recorded.rename(self.root / "elsewhere.json")
+            recorded.symlink_to(self.root / "elsewhere.json")
+
+        for change in (unrecorded_file, changed_file, nested_directory, no_manifest, unreadable_manifest,
+                       manifest_without_a_block, a_plain_file, a_symlink_to_an_identical_directory,
+                       a_recorded_name_that_is_a_symlink_to_identical_bytes):
+            shutil.rmtree(self.root)
+            self.setUp()
+            self._enabled_build()
+            change()
+            before = {
+                str(path.relative_to(self.root)): path.read_bytes() if path.is_file() else None
+                for path in sorted(self.root.rglob("*"))
+            }
+            with self.subTest(change=change.__name__):
+                with self.assertLogs("jqqlib", level="WARNING") as logs:
+                    self.assertIsNone(pipeline.provider_listing({}, self.qlib_dir, fetch=True))
+                self.assertIn("left as it is", logs.output[0])
+                after = {
+                    str(path.relative_to(self.root)): path.read_bytes() if path.is_file() else None
+                    for path in sorted(self.root.rglob("*"))
+                }
+                self.assertEqual(after, before)
 
     def test_enabled_with_fetch_stores_and_writes_the_targets_from_first_year_on(self) -> None:
         client = _Client()

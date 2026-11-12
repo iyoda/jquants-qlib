@@ -41,9 +41,11 @@ from .ledger import (
     read_ledger,
 )
 from .listing_sync import (
+    LISTING_KEPT,
+    LISTING_REMOVED,
     fetch_missing_year_ends,
     provider_sessions,
-    remove_provider_listings,
+    remove_recorded_listings,
     target_year_ends,
     write_provider_listings,
 )
@@ -52,6 +54,7 @@ from .manifest import (
     DATASET_QUALITY_REPORT_FILENAME,
     csv_source_manifest_path,
     read_csv_source_manifest,
+    read_dataset_manifest,
     write_csv_source_manifest,
     write_dataset_artifacts,
     write_json_atomic,
@@ -169,12 +172,29 @@ def _csv_source(csv_path: Path) -> dict[str, Any]:
     }
 
 
+def _recorded_listing_files(qlib_dir: Path) -> dict[str, str]:
+    try:
+        manifest = read_dataset_manifest(qlib_dir)
+    except (OSError, ValueError):
+        return {}
+    block = manifest.get("listing") if isinstance(manifest, dict) else None
+    files = block.get("files") if isinstance(block, dict) else None
+    if not isinstance(files, list):
+        return {}
+    return {
+        entry["path"]: entry["sha256"]
+        for entry in files
+        if isinstance(entry, dict) and isinstance(entry.get("path"), str) and isinstance(entry.get("sha256"), str)
+    }
+
+
 def provider_listing(config: dict, qlib_dir: Path, *, fetch: bool) -> dict[str, Any] | None:
     """Rebuild the provider's ``listing`` subtree and return its manifest block; ``None`` when disabled.
 
-    With ``listing.enabled`` false nothing is requested or read, and a ``listing`` subtree left by an
-    earlier enabled build is removed, so the provider holds no listing file its manifest does not
-    record; the stored responses are kept. Otherwise the year ends of the
+    With ``listing.enabled`` false nothing is requested. A ``listing`` subtree is removed when the
+    manifest still in ``qlib_dir`` records every file in it, which shows that an earlier enabled build
+    wrote it; any other ``listing`` entry is left as it is, with a warning, and the stored responses
+    are never touched. Otherwise the year ends of the
     finished years in the provider calendar are the targets. ``fetch`` asks the API for the targets that
     have no stored response; a failure there, including a missing credential, is logged and recorded in
     the block and never raised, and so is a stored response that cannot be read, so the price build it
@@ -182,8 +202,15 @@ def provider_listing(config: dict, qlib_dir: Path, *, fetch: bool) -> dict[str, 
     """
     listing = listing_config(config)
     if not listing.enabled:
-        if remove_provider_listings(qlib_dir):
-            logger.warning("Listing is disabled; removed the listing subtree an earlier build left in %s.", qlib_dir)
+        outcome = remove_recorded_listings(qlib_dir, _recorded_listing_files(qlib_dir))
+        if outcome == LISTING_REMOVED:
+            logger.warning("Listing is disabled; removed the listing subtree the previous build recorded.")
+        elif outcome == LISTING_KEPT:
+            logger.warning(
+                "Listing is disabled and %s holds a listing entry the previous manifest does not record; "
+                "it is left as it is and the new manifest does not record it.",
+                qlib_dir,
+            )
         return None
     days = target_year_ends(provider_sessions(qlib_dir), listing.first_year)
     failures: dict[dt.date, str] = {}

@@ -334,7 +334,7 @@ Python module ではなく、これらの JSON artifact を読む前提です。
 
 `listing.enabled: true` にすると、provider に `listing/<YYYY-MM-DD>.json` が加わります。各ファイルは、
 その年の最後の営業日に上場していた全銘柄の、銘柄コード・市場区分・商品区分です。既定は無効で、無効のときは
-API を呼ばず、provider と manifest は今までと同じです。
+API を呼びません。provider に `listing` が無ければ、provider と manifest は今までと同じです。
 
 - 対象は、provider のカレンダーで終わっている年（翌年の営業日がある年）の最後の営業日です。
   `listing.first_year` で、対象にする最初の年を決められます。
@@ -358,8 +358,14 @@ API を呼ばず、provider と manifest は今までと同じです。
 - `listing.raw_dir` には、会社名などを含む応答の全項目が入ります。J-Quants のデータは再配布できないので、
   Git の管理の外（既定の `./data/` の下）に置いてください。
 - 無効に戻すと、次に provider を作るときに `listing/` を消し、警告を出します。manifest に `listing` が
-  無いのに、ファイルだけが残ることを防ぐためです。`listing.raw_dir` の保存済みの応答は消しません。もう一度
-  有効にすれば、API を呼ばずに `listing/` を作り直せます。
+  無いのに、ファイルだけが残ることを防ぐためです。消すのは、provider に残っている前の manifest が、
+  `listing/` の全部のファイルを SHA-256 つきで記録している場合だけです。記録に無いファイルがある、中身が
+  記録と違う、`listing` がディレクトリでない、前の manifest が読めない、のどれかにあたる場合は、何も消さずに
+  警告を出します。その `listing` は、新しい manifest には記録されません。
+- `listing.raw_dir` の保存済みの応答は消しません。もう一度有効にすると、保存済みの基準日については API を
+  呼ばずに `listing/` を作り直します。
+- `listing.raw_dir` は、`storage.qlib_dir` の外に置きます。中に置いた設定は、設定エラーになります。provider を
+  作る処理が `listing/` を置き換えるためです。
 
 ## 日次運用
 
