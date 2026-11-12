@@ -43,6 +43,7 @@ from .ledger import (
 from .listing_sync import (
     fetch_missing_year_ends,
     provider_sessions,
+    remove_provider_listings,
     target_year_ends,
     write_provider_listings,
 )
@@ -171,7 +172,9 @@ def _csv_source(csv_path: Path) -> dict[str, Any]:
 def provider_listing(config: dict, qlib_dir: Path, *, fetch: bool) -> dict[str, Any] | None:
     """Rebuild the provider's ``listing`` subtree and return its manifest block; ``None`` when disabled.
 
-    With ``listing.enabled`` false nothing is requested, read or written. Otherwise the year ends of the
+    With ``listing.enabled`` false nothing is requested or read, and a ``listing`` subtree left by an
+    earlier enabled build is removed, so the provider holds no listing file its manifest does not
+    record; the stored responses are kept. Otherwise the year ends of the
     finished years in the provider calendar are the targets. ``fetch`` asks the API for the targets that
     have no stored response; a failure there, including a missing credential, is logged and recorded in
     the block and never raised, and so is a stored response that cannot be read, so the price build it
@@ -179,6 +182,8 @@ def provider_listing(config: dict, qlib_dir: Path, *, fetch: bool) -> dict[str, 
     """
     listing = listing_config(config)
     if not listing.enabled:
+        if remove_provider_listings(qlib_dir):
+            logger.warning("Listing is disabled; removed the listing subtree an earlier build left in %s.", qlib_dir)
         return None
     days = target_year_ends(provider_sessions(qlib_dir), listing.first_year)
     failures: dict[dt.date, str] = {}

@@ -118,6 +118,22 @@ def _replace_subtree(provider: Path, staged: Path, *, keep: bool) -> None:
         shutil.rmtree(retired, ignore_errors=True)
 
 
+def remove_provider_listings(qlib_dir: Path) -> bool:
+    """Remove ``<qlib_dir>/listing`` and report whether there was one.
+
+    A build made with the listing disabled records no listing in its manifest, so a subtree left by an
+    earlier build would be in the provider without a record. Stored responses are not touched.
+    """
+    provider = Path(qlib_dir).resolve()
+    current = provider / LISTING_SUBTREE
+    if not os.path.lexists(current):
+        return False
+    retired = provider / f".{LISTING_SUBTREE}.old-{uuid.uuid4().hex}"
+    current.rename(retired)
+    shutil.rmtree(retired, ignore_errors=True)
+    return True
+
+
 def write_provider_listings(
     raw_dir: Path,
     qlib_dir: Path,

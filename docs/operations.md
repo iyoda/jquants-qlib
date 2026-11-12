@@ -357,8 +357,9 @@ API を呼ばず、provider と manifest は今までと同じです。
   取り直せないので、`listing.raw_dir` はバックアップの対象にしてください。
 - `listing.raw_dir` には、会社名などを含む応答の全項目が入ります。J-Quants のデータは再配布できないので、
   Git の管理の外（既定の `./data/` の下）に置いてください。
-- 無効に戻しても、すでにある `listing/` は消しません。manifest から `listing` が無くなるので、
-  読む側は manifest に載っているファイルだけを使ってください。
+- 無効に戻すと、次に provider を作るときに `listing/` を消し、警告を出します。manifest に `listing` が
+  無いのに、ファイルだけが残ることを防ぐためです。`listing.raw_dir` の保存済みの応答は消しません。もう一度
+  有効にすれば、API を呼ばずに `listing/` を作り直せます。
 
 ## 日次運用
 

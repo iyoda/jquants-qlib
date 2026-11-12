@@ -294,11 +294,17 @@ class ProviderListingTests(_Workspace):
         self.assertEqual(self.provider_entries(), ["calendars"])
         self.assertFalse(self.raw_dir.exists())
 
-    def test_disabled_leaves_an_existing_subtree_untouched(self) -> None:
-        (self.qlib_dir / "listing").mkdir()
-        (self.qlib_dir / "listing" / "2030-12-30.json").write_text("{}", encoding="utf-8")
-        self.assertIsNone(pipeline.provider_listing({}, self.qlib_dir, fetch=True))
-        self.assertEqual(self.listing_files(), ["2030-12-30.json"])
+    def test_disabled_removes_a_subtree_an_earlier_build_left_and_keeps_the_stored_responses(self) -> None:
+        fetch_missing_year_ends(_Client(), YEAR_ENDS, self.raw_dir, **RETRY)
+        write_provider_listings(self.raw_dir, self.qlib_dir, YEAR_ENDS)
+        stored = sorted(path.name for path in self.raw_dir.iterdir())
+        with self.assertLogs("jqqlib", level="WARNING") as logs:
+            self.assertIsNone(pipeline.provider_listing(self.config(enabled=False), self.qlib_dir, fetch=True))
+        self.assertEqual(len(logs.records), 1)
+        self.assertEqual(self.provider_entries(), ["calendars"])
+        self.assertEqual(sorted(path.name for path in self.raw_dir.iterdir()), stored)
+        with self.assertNoLogs("jqqlib", level="WARNING"):
+            self.assertIsNone(pipeline.provider_listing(self.config(enabled=False), self.qlib_dir, fetch=True))
 
     def test_enabled_with_fetch_stores_and_writes_the_targets_from_first_year_on(self) -> None:
         client = _Client()
